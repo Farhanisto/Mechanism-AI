@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -5,6 +6,7 @@ from app.ai.meta_client import (
     MetaModelRequestError,
     ModelCompletion,
 )
+from app.mechanism.kinematics import KinematicsError
 from app.mechanism.schemas import DesignRunCreateRequest
 from app.orchestration.design_run import DesignRunOrchestrator, EventBroker, RunStore
 from app.persistence.artifacts import ArtifactStore
@@ -52,9 +54,13 @@ class ScriptedMetaClient:
         *,
         candidate_payloads: list[dict[str, Any]],
         error: Exception | None = None,
+        brief_payload: dict[str, Any] | None = None,
+        delay_s: float = 0.0,
     ) -> None:
         self.candidate_payloads = candidate_payloads
         self.error = error
+        self.brief_payload = brief_payload
+        self.delay_s = delay_s
         self.schema_names: list[str] = []
 
     @property
@@ -62,12 +68,14 @@ class ScriptedMetaClient:
         return True
 
     async def complete_json(self, **kwargs: Any) -> ModelCompletion:
+        if self.delay_s > 0.0:
+            await asyncio.sleep(self.delay_s)
         if self.error is not None:
             raise self.error
         schema_name = kwargs["schema_name"]
         self.schema_names.append(schema_name)
         if schema_name == "normalized_brief":
-            payload = BRIEF_PAYLOAD
+            payload = self.brief_payload if self.brief_payload is not None else BRIEF_PAYLOAD
         else:
             payload = self.candidate_payloads.pop(0)
         return ModelCompletion(
@@ -84,6 +92,8 @@ class ScriptedMetaClient:
 def make_orchestrator(
     tmp_path: Path,
     client: ScriptedMetaClient,
+    *,
+    max_run_seconds: float = 60.0,
 ) -> tuple[DesignRunOrchestrator, EventBroker]:
     artifacts = ArtifactStore(tmp_path)
     store = RunStore(artifacts)
@@ -93,6 +103,7 @@ def make_orchestrator(
         events=events,
         artifacts=artifacts,
         meta_client=client,
+        max_run_seconds=max_run_seconds,
     )
     return orchestrator, events
 
@@ -167,3 +178,65 @@ async def test_ai_pipeline_marks_run_failed_on_model_error(tmp_path: Path) -> No
     assert event_names[-1] == "run_failed"
     error_artifact = orchestrator.artifacts.read_json(run.run_id, "error.json")
     assert error_artifact["error_code"] == "MODEL_REQUEST_FAILED"
+
+
+async def test_ai_pipeline_marks_run_failed_on_invalid_model_output(tmp_path: Path) -> None:
+    client = ScriptedMetaClient(
+        candidate_payloads=[],
+        brief_payload={"mechanism_type": "four_bar_linkage"},
+    )
+    orchestrator, broker = make_orchestrator(tmp_path, client)
+    run = orchestrator.create_run(DesignRunCreateRequest(prompt=PROMPT))
+
+    await orchestrator.execute(run.run_id)
+
+    stored_run = orchestrator.store.get(run.run_id)
+    assert stored_run is not None
+    assert stored_run.status.value == "failed"
+    assert stored_run.error_code == "INVALID_MODEL_OUTPUT"
+
+    event_names = await replay_events(broker, run.run_id)
+    assert event_names[-1] == "run_failed"
+
+
+async def test_ai_pipeline_marks_run_failed_on_timeout(tmp_path: Path) -> None:
+    client = ScriptedMetaClient(candidate_payloads=[], delay_s=0.2)
+    orchestrator, broker = make_orchestrator(tmp_path, client, max_run_seconds=0.05)
+    run = orchestrator.create_run(DesignRunCreateRequest(prompt=PROMPT))
+
+    await orchestrator.execute(run.run_id)
+
+    stored_run = orchestrator.store.get(run.run_id)
+    assert stored_run is not None
+    assert stored_run.status.value == "failed"
+    assert stored_run.error_code == "RUN_TIMEOUT"
+
+    event_names = await replay_events(broker, run.run_id)
+    assert event_names[-1] == "run_failed"
+
+
+async def test_ai_pipeline_marks_run_failed_on_simulation_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    def raise_kinematics_error(candidate: Any, **kwargs: Any) -> None:
+        raise KinematicsError("the solver failed")
+
+    monkeypatch.setattr(
+        "app.orchestration.design_run.run_candidate_simulation",
+        raise_kinematics_error,
+    )
+    client = ScriptedMetaClient(
+        candidate_payloads=[candidate_payload(95, 35, 135, 100)]
+    )
+    orchestrator, broker = make_orchestrator(tmp_path, client)
+    run = orchestrator.create_run(DesignRunCreateRequest(prompt=PROMPT))
+
+    await orchestrator.execute(run.run_id)
+
+    stored_run = orchestrator.store.get(run.run_id)
+    assert stored_run is not None
+    assert stored_run.status.value == "failed"
+    assert stored_run.error_code == "SIMULATION_ERROR"
+
+    event_names = await replay_events(broker, run.run_id)
+    assert event_names[-1] == "run_failed"
