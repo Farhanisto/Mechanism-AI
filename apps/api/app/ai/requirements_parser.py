@@ -74,6 +74,7 @@ class BriefProposal(BaseModel):
     requirement_sources: dict[
         str, Literal["user_provided", "ai_proposed", "default_assumption"]
     ] = Field(default_factory=dict)
+    evaluator_config: dict[str, float | int | str | bool] = Field(default_factory=dict)
 
 
 def policy_clarification_questions(prompt: str) -> list[ClarificationQuestion]:

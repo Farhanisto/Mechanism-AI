@@ -867,3 +867,34 @@ button:disabled {
   background: var(--warning-bg);
   color: var(--warning);
 }
+
+.capability-panel {
+  margin: 10px 0;
+  padding: 10px 12px;
+  background: var(--surface-muted);
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+.capability-panel p {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.pill-capability-supported {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.pill-capability-partial {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.pill-capability-not_supported,
+.pill-capability-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}

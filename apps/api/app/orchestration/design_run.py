@@ -18,12 +18,16 @@ from app.ai.meta_client import (
     UnconfiguredMetaModelClient,
 )
 from app.ai.requirements_parser import default_brief_from_prompt, parse_requirements
+from app.capabilities.registry import CapabilityRegistry, default_registry
+from app.capabilities.router import route_request
 from app.evaluation.evaluator import EVALUATOR_VERSION, evaluate_candidate
 from app.evaluation.metrics import measure_simulation
 from app.mechanism.kinematics import DEFAULT_SAMPLE_COUNT, KinematicsError
 from app.mechanism.schemas import (
     TERMINAL_EVENTS,
     CandidateRecord,
+    CapabilityAssessment,
+    CapabilitySupport,
     ClarificationQuestion,
     DesignRun,
     DesignRunCreateRequest,
@@ -169,6 +173,7 @@ class DesignRunOrchestrator:
         max_candidates: int = 3,
         max_run_seconds: float = 60.0,
         simulation_engine: str = ENGINE_AUTO,
+        registry: CapabilityRegistry | None = None,
         limits: dict[str, Any] | None = None,
     ) -> None:
         self.store = store
@@ -178,6 +183,7 @@ class DesignRunOrchestrator:
         self.max_candidates = max_candidates
         self.max_run_seconds = max_run_seconds
         self.simulation_engine = simulation_engine
+        self.capabilities = registry or default_registry()
         self.limits = limits or {}
         self._cancelled: set[str] = set()
 
@@ -445,6 +451,34 @@ class DesignRunOrchestrator:
                 },
             )
             return
+        assessment = route_request(
+            run.original_prompt,
+            brief,
+            clarification_answers=run.clarification_answers,
+            registry=self.capabilities,
+        )
+        brief = brief.model_copy(update={"capability_assessment": assessment})
+        self.artifacts.write_json(
+            run.run_id,
+            "brief.json",
+            {"source": source, "brief": brief.model_dump(mode="json")},
+        )
+        self.events.publish(
+            run.run_id,
+            RunEventName.CAPABILITY_SELECTED.value,
+            {
+                "capability_id": assessment.capability_id,
+                "capability_version": assessment.capability_version,
+                "status": assessment.status.value,
+                "unsupported_requirements": assessment.unsupported_requirements,
+                "unavailable_checks": assessment.unavailable_checks,
+            },
+        )
+        if assessment.status is CapabilitySupport.NOT_SUPPORTED:
+            self._complete_without_candidates(
+                run, brief, source, assessment, engine_info
+            )
+            return
         self._check_cancel(run)
 
         records: list[CandidateRecord] = []
@@ -551,8 +585,10 @@ class DesignRunOrchestrator:
         if not records:
             raise RuntimeError("The pipeline produced no candidate to evaluate.")
         final_record = passed_record or self._best_record(records, brief)
-        no_pass = final_record.evaluation is None or (
-            final_record.evaluation.status is not EvaluationStatus.PASSED
+        no_pass = (
+            final_record.evaluation is None
+            or final_record.evaluation.status is not EvaluationStatus.PASSED
+            or bool(assessment.unavailable_checks)
         )
 
         self._update_run(run, stage=Stage.REPORT)
@@ -569,6 +605,7 @@ class DesignRunOrchestrator:
             requirements={
                 "source": source,
                 "brief": brief.model_dump(mode="json"),
+                "capability_assessment": assessment.model_dump(mode="json"),
             },
             simulation_engine=SimulationEngineInfo(**engine_info),
             limits={
@@ -608,7 +645,74 @@ class DesignRunOrchestrator:
                     if final_record.evaluation is not None
                     else []
                 ),
+                "capability_status": assessment.status.value,
+                "unavailable_checks": assessment.unavailable_checks,
                 "no_pass": no_pass,
+            },
+        )
+
+    def _complete_without_candidates(
+        self,
+        run: DesignRun,
+        brief: NormalizedBrief,
+        source: str,
+        assessment: CapabilityAssessment,
+        engine_info: dict[str, Any],
+    ) -> None:
+        """Finish a run honestly when no registered capability can handle it."""
+        self._update_run(run, stage=Stage.REPORT)
+        self._update_run(
+            run,
+            status=RunStatus.COMPLETED,
+            stage=Stage.COMPLETED,
+            final_candidate_id=None,
+            no_pass=True,
+        )
+        bundle = EvidenceBundle(
+            run=run,
+            prompt=run.original_prompt,
+            requirements={
+                "source": source,
+                "brief": brief.model_dump(mode="json"),
+                "capability_assessment": assessment.model_dump(mode="json"),
+            },
+            simulation_engine=SimulationEngineInfo(**engine_info),
+            limits={
+                "max_candidates": run.max_candidates,
+                "max_run_seconds": self.max_run_seconds,
+                "simulation_sample_count": DEFAULT_SAMPLE_COUNT,
+                **self.limits,
+            },
+            collision_model="moving_links_only_zero_thickness",
+            evaluator_version=EVALUATOR_VERSION,
+            candidates=[],
+            final_candidate_id=None,
+            no_pass=True,
+            outcome="not_supported",
+            limitations=CLAIM_LIMITATIONS,
+            manifest=self.artifacts.manifest(run.run_id),
+        )
+        self.artifacts.write_json(run.run_id, "evidence.json", bundle)
+        self.events.publish(
+            run.run_id,
+            RunEventName.ARTIFACT_READY.value,
+            {
+                "artifacts": [entry.name for entry in bundle.manifest]
+                + ["evidence.json"],
+            },
+        )
+        self.events.publish(
+            run.run_id,
+            RunEventName.RUN_COMPLETED.value,
+            {
+                "status": "not_supported",
+                "stage": run.stage.value,
+                "final_candidate_id": None,
+                "failed_constraints": [],
+                "capability_status": assessment.status.value,
+                "unavailable_checks": assessment.unavailable_checks,
+                "unsupported_requirements": assessment.unsupported_requirements,
+                "no_pass": True,
             },
         )
 
@@ -736,6 +840,16 @@ def render_evidence_report(
             + f" · evaluator {bundle.evaluator_version}"
         )
         lines.append(f"Requirements source: {bundle.requirements.get('source')}")
+        assessment_data = bundle.requirements.get("capability_assessment")
+        if assessment_data:
+            lines.append(
+                f"Capability: {assessment_data.get('capability_id')} "
+                f"{assessment_data.get('capability_version')} - {assessment_data.get('status')}"
+            )
+            for item in assessment_data.get("unsupported_requirements", []):
+                lines.append(f"- Not evaluated: {item}")
+            for item in assessment_data.get("unavailable_checks", []):
+                lines.append(f"- Unresolved required check: {item}")
     final = next(
         (
             record

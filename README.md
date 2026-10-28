@@ -25,6 +25,8 @@ Working today:
 - Deterministic offline fallback for briefs and candidates when no key is configured
 - Clarification workflow: requirement provenance and explicit unknowns, blocking questions
   pause the run until answered, answers update the brief and the evidence bundle
+- Capability registry and routing: registered capabilities with test status, honest
+  supported/partial/not-supported assessments, and unresolved required checks that block a pass
 - Bounded candidate loop with evaluator feedback fed into the next attempt
 - Independent evaluator and path metrics, tested without any LLM call
 - Reviewed benchmark suites with recorded results: evaluator classification

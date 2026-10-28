@@ -97,6 +97,38 @@ export function ValidationReport({
         </div>
       ) : null}
 
+      {briefArtifact?.brief.capability_assessment ? (
+        <div className="capability-panel">
+          <p>
+            <strong>
+              Capability: {briefArtifact.brief.capability_assessment.capability_id}{" "}
+              {briefArtifact.brief.capability_assessment.capability_version}
+            </strong>
+            <span
+              className={`pill pill-capability-${briefArtifact.brief.capability_assessment.status}`}
+            >
+              {briefArtifact.brief.capability_assessment.status.replace("_", " ")}
+            </span>
+          </p>
+          {briefArtifact.brief.capability_assessment.unsupported_requirements.length > 0 ? (
+            <ul className="failure-list">
+              {briefArtifact.brief.capability_assessment.unsupported_requirements.map(
+                (item) => (
+                  <li key={item}>Not evaluated: {item}</li>
+                ),
+              )}
+            </ul>
+          ) : null}
+          {briefArtifact.brief.capability_assessment.unavailable_checks.length > 0 ? (
+            <ul className="failure-list">
+              {briefArtifact.brief.capability_assessment.unavailable_checks.map((item) => (
+                <li key={item}>Unresolved required check: {item}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+
       {evaluation ? (
         <>
           <div className={`status-line status-${evaluation.status}`}>

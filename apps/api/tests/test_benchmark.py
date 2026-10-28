@@ -134,7 +134,10 @@ async def test_repair_benchmark(case: dict[str, Any], tmp_path: Path) -> None:
         ),
     )
     run = orchestrator.create_run(
-        DesignRunCreateRequest(prompt="benchmark repair case", options={"max_candidates": 3})
+        DesignRunCreateRequest(
+            prompt="Design a four-bar linkage for the benchmark case.",
+            options={"max_candidates": 3},
+        )
     )
     await orchestrator.execute(run.run_id)
 
@@ -174,7 +177,8 @@ async def test_repair_benchmark_success_rate(tmp_path: Path) -> None:
         )
         run = orchestrator.create_run(
             DesignRunCreateRequest(
-                prompt="benchmark repair case", options={"max_candidates": 3}
+                prompt="Design a four-bar linkage for the benchmark case.",
+                options={"max_candidates": 3},
             )
         )
         await orchestrator.execute(run.run_id)

@@ -282,6 +282,7 @@ async def test_event_order_matches_the_contract(tmp_path: Path) -> None:
     assert event_names == [
         "run_started",
         "requirements_ready",
+        "capability_selected",
         "candidate_generated",
         "simulation_completed",
         "evaluation_completed",
@@ -450,3 +451,70 @@ async def test_invalid_clarification_answers_are_rejected(tmp_path: Path) -> Non
     stored_run = orchestrator.store.get(run.run_id)
     assert stored_run is not None
     assert stored_run.status.value == "awaiting_clarification"
+
+
+async def test_unsupported_prompt_completes_without_candidates(tmp_path: Path) -> None:
+    orchestrator, broker = make_orchestrator(
+        tmp_path, ScriptedMetaClient(candidate_payloads=[])
+    )
+    run = orchestrator.create_run(
+        DesignRunCreateRequest(
+            prompt=(
+                "Design an attachable umbrella for a motorbike that deploys "
+                "at the press of a button."
+            )
+        )
+    )
+
+    await orchestrator.execute(run.run_id)
+
+    stored_run = orchestrator.store.get(run.run_id)
+    assert stored_run is not None
+    assert stored_run.status.value == "completed"
+    assert stored_run.no_pass is True
+    assert stored_run.final_candidate_id is None
+    assert orchestrator.store.list_candidates(run.run_id) == []
+
+    event_names = await replay_events(broker, run.run_id)
+    assert "capability_selected" in event_names
+    assert "candidate_generated" not in event_names
+    assert event_names[-1] == "run_completed"
+
+    evidence = orchestrator.artifacts.read_json(run.run_id, "evidence.json")
+    assert evidence["outcome"] == "not_supported"
+    assessment = evidence["requirements"]["capability_assessment"]
+    assert assessment["status"] == "not_supported"
+    assert assessment["unsupported_requirements"]
+
+
+async def test_unresolved_required_check_blocks_a_pass(tmp_path: Path) -> None:
+    payload = {
+        **BRIEF_PAYLOAD,
+        "evaluator_config": {"fatigue_cycles": 1_000_000},
+    }
+    client = ScriptedMetaClient(
+        candidate_payloads=[candidate_payload(95, 35, 135, 100)], brief_payload=payload
+    )
+    orchestrator, broker = make_orchestrator(tmp_path, client)
+    run = orchestrator.create_run(
+        DesignRunCreateRequest(prompt=PROMPT, options={"max_candidates": 1})
+    )
+
+    await orchestrator.execute(run.run_id)
+
+    stored_run = orchestrator.store.get(run.run_id)
+    assert stored_run is not None
+    assert stored_run.status.value == "completed"
+    assert stored_run.no_pass is True
+    candidates = orchestrator.store.list_candidates(run.run_id)
+    assert candidates[0].evaluation is not None
+    assert candidates[0].evaluation.status.value == "passed"
+
+    evidence = orchestrator.artifacts.read_json(run.run_id, "evidence.json")
+    assessment = evidence["requirements"]["capability_assessment"]
+    assert assessment["status"] == "partial"
+    assert assessment["unavailable_checks"] == ["fatigue_cycles"]
+    assert evidence["outcome"] == "no_pass"
+
+    event_names = await replay_events(broker, run.run_id)
+    assert event_names[-1] == "run_completed"

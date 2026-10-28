@@ -283,6 +283,7 @@ class RunEventName(StrEnum):
     RUN_STARTED = "run_started"
     REQUIREMENTS_READY = "requirements_ready"
     CLARIFICATION_REQUIRED = "clarification_required"
+    CAPABILITY_SELECTED = "capability_selected"
     CANDIDATE_GENERATED = "candidate_generated"
     SIMULATION_COMPLETED = "simulation_completed"
     EVALUATION_COMPLETED = "evaluation_completed"
