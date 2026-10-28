@@ -84,8 +84,6 @@ async def test_requirements_parser_validates_and_adds_standard_assumptions() -> 
     assert call["schema_name"] == "normalized_brief"
     assert call["schema"]["additionalProperties"] is False
     assert set(call["schema"]["required"]) == {
-        "mechanism_type",
-        "units",
         "target_motion",
         "constraints",
         "assumptions",
@@ -178,3 +176,63 @@ def test_default_candidates_change_with_attempt() -> None:
 
     assert first.parameters != second.parameters
     assert second.candidate_id == "candidate_002"
+
+
+def test_default_brief_records_provenance_and_unknowns() -> None:
+    brief = default_brief_from_prompt("Design a four-bar linkage.")
+
+    assert brief.requirement_sources["target_motion.travel_distance"] == "default_assumption"
+    assert brief.requirement_sources["constraints.max_footprint"] == "default_assumption"
+    assert "target_motion.travel_distance" in brief.unknowns
+
+    explicit = default_brief_from_prompt(PROMPT)
+
+    assert explicit.requirement_sources["target_motion.travel_distance"] == "user_provided"
+    assert explicit.requirement_sources["constraints.max_footprint"] == "user_provided"
+    assert explicit.unknowns == ["target_motion.trajectory_tolerance"]
+
+
+def test_load_prompt_produces_a_blocking_question() -> None:
+    brief = default_brief_from_prompt(
+        "Design a four-bar linkage with 100 mm of travel that can carry a heavy load."
+    )
+
+    fields = {question.field: question for question in brief.clarification_questions}
+    assert "verification_scope.kinematic_only" in fields
+    assert fields["verification_scope.kinematic_only"].blocking is True
+
+
+def test_unmodeled_motion_prompt_produces_a_blocking_question() -> None:
+    brief = default_brief_from_prompt(
+        "Design a four-bar linkage that rotates the platform continuously."
+    )
+
+    fields = {question.field for question in brief.clarification_questions}
+    assert "target_motion.type" in fields
+
+
+async def test_parse_requirements_merges_policy_questions_with_model_questions() -> None:
+    payload = {
+        **BRIEF_PAYLOAD,
+        "clarification_questions": [
+            {
+                "question_id": "q_material",
+                "question": "Which material should the links use?",
+                "field": "material",
+                "blocking": False,
+            }
+        ],
+        "unknowns": ["material"],
+        "requirement_sources": {"target_motion.travel_distance": "user_provided"},
+    }
+    client = FakeMetaClient(payload)
+
+    brief, _ = await parse_requirements(
+        "Design a linkage that can carry a heavy load.", client=client
+    )
+
+    fields = {question.field for question in brief.clarification_questions}
+    assert "material" in fields
+    assert "verification_scope.kinematic_only" in fields
+    assert brief.unknowns == ["material"]
+    assert brief.requirement_sources["target_motion.travel_distance"] == "user_provided"

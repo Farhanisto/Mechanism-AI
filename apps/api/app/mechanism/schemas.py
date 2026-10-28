@@ -209,6 +209,7 @@ class CandidateRecord(BaseModel):
 class RunStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
+    AWAITING_CLARIFICATION = "awaiting_clarification"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -241,6 +242,8 @@ class DesignRun(BaseModel):
     final_candidate_id: str | None = None
     max_candidates: int = Field(default=3, ge=1, le=3)
     no_pass: bool = False
+    pending_clarifications: list[ClarificationQuestion] = Field(default_factory=list)
+    clarification_answers: dict[str, str] = Field(default_factory=dict)
 
 
 class DesignRunOptions(BaseModel):
@@ -270,9 +273,16 @@ class DesignRunCreateRequest(BaseModel):
     options: DesignRunOptions = Field(default_factory=DesignRunOptions)
 
 
+class ClarificationsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    answers: dict[str, str] = Field(min_length=1)
+
+
 class RunEventName(StrEnum):
     RUN_STARTED = "run_started"
     REQUIREMENTS_READY = "requirements_ready"
+    CLARIFICATION_REQUIRED = "clarification_required"
     CANDIDATE_GENERATED = "candidate_generated"
     SIMULATION_COMPLETED = "simulation_completed"
     EVALUATION_COMPLETED = "evaluation_completed"

@@ -1,5 +1,6 @@
 import { RunStatusPanel } from "./components/RunStatusPanel";
 import { CandidateHistory } from "./features/candidate-history/CandidateHistory";
+import { ClarificationForm } from "./features/clarifications/ClarificationForm";
 import { DesignInputForm } from "./features/design-input/DesignInputForm";
 import { EvidenceArtifacts } from "./features/evidence/EvidenceArtifacts";
 import { MechanismCanvas } from "./features/simulation/MechanismCanvas";
@@ -18,6 +19,7 @@ export function App() {
     error,
     start,
     cancel,
+    answerClarifications,
   } = useDesignRun();
 
   const finalRecord =
@@ -45,6 +47,10 @@ export function App() {
         <DesignInputForm onSubmit={start} disabled={isStarting} />
         <RunStatusPanel run={run} events={events} streamState={streamState} onCancel={() => void cancel()} />
       </div>
+
+      {run ? (
+        <ClarificationForm run={run} onSubmit={(answers) => void answerClarifications(answers)} />
+      ) : null}
 
       <div className="layout">
         <MechanismCanvas simulation={simulation} brief={briefArtifact} metrics={metrics} />

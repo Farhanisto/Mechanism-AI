@@ -23,6 +23,8 @@ Working today:
 - Meta Model API adapter (`muse-spark-1.3`) with strict JSON schemas, bounded retries and typed
   errors; mocked HTTP tests never call the live API
 - Deterministic offline fallback for briefs and candidates when no key is configured
+- Clarification workflow: requirement provenance and explicit unknowns, blocking questions
+  pause the run until answered, answers update the brief and the evidence bundle
 - Bounded candidate loop with evaluator feedback fed into the next attempt
 - Independent evaluator and path metrics, tested without any LLM call
 - Reviewed benchmark suites with recorded results: evaluator classification
@@ -140,6 +142,7 @@ structured `simulation_valid: false` result with a failure reason, never a crash
 | `GET` | `/api/v1/design-runs/{run_id}/events` | SSE progress stream (replays history first) |
 | `GET` | `/api/v1/design-runs/{run_id}/candidates` | Candidate parameters and evaluations |
 | `GET` | `/api/v1/design-runs/{run_id}/evidence` | Evidence summary, human-readable report, artifact manifest with hashes |
+| `POST` | `/api/v1/design-runs/{run_id}/clarifications` | Answer blocking clarification questions and resume the run |
 | `POST` | `/api/v1/design-runs/{run_id}/cancel` | Request cooperative cancellation (idempotent) |
 | `GET` | `/api/v1/design-runs/{run_id}/artifacts/{name}` | Persisted JSON artifact, e.g. `run.json` |
 | `GET` | `/api/v1/health` | Health check |

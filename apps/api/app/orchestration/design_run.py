@@ -24,11 +24,13 @@ from app.mechanism.kinematics import DEFAULT_SAMPLE_COUNT, KinematicsError
 from app.mechanism.schemas import (
     TERMINAL_EVENTS,
     CandidateRecord,
+    ClarificationQuestion,
     DesignRun,
     DesignRunCreateRequest,
     EvaluationStatus,
     EvidenceBundle,
     NormalizedBrief,
+    RequirementSource,
     RunEventName,
     RunStatus,
     SimulationEngineInfo,
@@ -54,6 +56,10 @@ CLAIM_LIMITATIONS = [
 
 class _RunCancelled(Exception):
     """Raised internally when a run cancellation request is observed."""
+
+
+class UnsupportedRequirementError(Exception):
+    """Raised when a clarification answer demands checks the evaluator cannot perform."""
 
 
 @dataclass(frozen=True)
@@ -179,6 +185,135 @@ class DesignRunOrchestrator:
         """Request cooperative cancellation; the pipeline stops at its next checkpoint."""
         self._cancelled.add(run_id)
 
+    def cancel_run(self, run: DesignRun) -> DesignRun:
+        """Cancel a run; paused runs are finalized immediately."""
+        if run.status is RunStatus.AWAITING_CLARIFICATION:
+            self._finish_cancelled(run)
+            return self.store.get(run.run_id) or run
+        if run.status in (RunStatus.QUEUED, RunStatus.RUNNING):
+            self.request_cancel(run.run_id)
+        return self.store.get(run.run_id) or run
+
+    def submit_clarifications(self, run_id: str, answers: dict[str, str]) -> DesignRun:
+        """Apply clarification answers to the brief so the run can resume."""
+        run = self.store.get(run_id)
+        if run is None:
+            raise ValueError(f"Unknown run {run_id!r}")
+        if run.status is not RunStatus.AWAITING_CLARIFICATION:
+            raise ValueError("The design run is not awaiting clarification")
+        expected = {question.question_id for question in run.pending_clarifications}
+        unknown = set(answers) - expected
+        if unknown:
+            raise ValueError(f"Unknown clarification ids: {sorted(unknown)}")
+        missing = expected - set(answers)
+        if missing:
+            raise ValueError(f"Missing answers for: {sorted(missing)}")
+
+        stored = self.artifacts.read_json(run_id, "brief.json")
+        brief = NormalizedBrief.model_validate(stored["brief"])
+        try:
+            for question in run.pending_clarifications:
+                brief = self._apply_answer(brief, question, answers[question.question_id])
+        except UnsupportedRequirementError as exc:
+            self._fail(run, "UNSUPPORTED_REQUIREMENT", str(exc))
+            return self.store.get(run_id) or run
+
+        brief = brief.model_copy(
+            update={
+                "clarification_questions": [
+                    question
+                    for question in brief.clarification_questions
+                    if not question.blocking
+                ]
+            }
+        )
+        self.artifacts.write_json(
+            run_id,
+            "brief.json",
+            {"source": stored["source"], "brief": brief.model_dump(mode="json")},
+        )
+        run.clarification_answers.update(answers)
+        run.pending_clarifications = []
+        self._update_run(run)
+        return run
+
+    @staticmethod
+    def _apply_answer(
+        brief: NormalizedBrief,
+        question: ClarificationQuestion,
+        raw_answer: str,
+    ) -> NormalizedBrief:
+        answer = raw_answer.strip()
+        if not answer:
+            raise ValueError("Clarification answers must not be empty")
+        field = question.field
+        sources = dict(brief.requirement_sources)
+        sources[field] = RequirementSource.USER_PROVIDED
+        unknowns = [unknown for unknown in brief.unknowns if unknown != field]
+
+        if field in ("verification_scope.kinematic_only", "target_motion.type"):
+            normalized = answer.lower()
+            if normalized not in ("yes", "no"):
+                raise ValueError("Answer must be 'yes' or 'no'")
+            if normalized == "no":
+                raise UnsupportedRequirementError(
+                    f"The answer to '{question.question_id}' needs checks or motion the "
+                    "evaluator does not implement; the run stops honestly."
+                )
+            assumptions = list(brief.assumptions)
+            note = (
+                "User confirmed: kinematic and geometric checks only; loading and "
+                "environmental requirements are not evaluated."
+                if field == "verification_scope.kinematic_only"
+                else "User confirmed near-horizontal travel as the output motion target."
+            )
+            if note not in assumptions:
+                assumptions.append(note)
+            return brief.model_copy(
+                update={
+                    "assumptions": assumptions,
+                    "requirement_sources": sources,
+                    "unknowns": unknowns,
+                }
+            )
+
+        if field in (
+            "target_motion.travel_distance",
+            "target_motion.trajectory_tolerance",
+            "constraints.max_footprint",
+        ):
+            try:
+                value = float(answer)
+            except ValueError as exc:
+                raise ValueError("Answer must be a number in millimetres") from exc
+            limit = 100.0 if field.endswith("trajectory_tolerance") else 10_000.0
+            if not 0.0 < value <= limit:
+                raise ValueError("Answer must be a positive value within the allowed range")
+            if field == "constraints.max_footprint":
+                update = {
+                    "constraints": brief.constraints.model_copy(
+                        update={"max_footprint": value}
+                    )
+                }
+            else:
+                key = field.rsplit(".", 1)[1]
+                update = {
+                    "target_motion": brief.target_motion.model_copy(update={key: value})
+                }
+            return brief.model_copy(
+                update={
+                    **update,
+                    "requirement_sources": sources,
+                    "unknowns": unknowns,
+                }
+            )
+
+        assumptions = list(brief.assumptions)
+        assumptions.append(f"Clarification {question.question_id} answered: {answer}")
+        return brief.model_copy(
+            update={"assumptions": assumptions, "requirement_sources": sources}
+        )
+
     def _check_cancel(self, run: DesignRun) -> None:
         if run.run_id in self._cancelled:
             raise _RunCancelled()
@@ -200,20 +335,26 @@ class DesignRunOrchestrator:
         run = self.store.get(run_id)
         if run is None:
             return
-        self._update_run(run, status=RunStatus.RUNNING, stage=Stage.PARSE_REQUIREMENTS)
-        self.events.publish(
-            run_id,
-            RunEventName.RUN_STARTED.value,
-            {
-                "status": run.status.value,
-                "stage": run.stage.value,
-                "max_candidates": run.max_candidates,
-                "ai_enabled": self.meta_client.is_configured,
-            },
+        resuming = run.status is RunStatus.AWAITING_CLARIFICATION
+        self._update_run(
+            run,
+            status=RunStatus.RUNNING,
+            stage=Stage.GENERATE_CANDIDATE if resuming else Stage.PARSE_REQUIREMENTS,
         )
+        if not resuming:
+            self.events.publish(
+                run_id,
+                RunEventName.RUN_STARTED.value,
+                {
+                    "status": run.status.value,
+                    "stage": run.stage.value,
+                    "max_candidates": run.max_candidates,
+                    "ai_enabled": self.meta_client.is_configured,
+                },
+            )
         try:
             async with asyncio.timeout(self.max_run_seconds):
-                await self._run_pipeline(run)
+                await self._run_pipeline(run, resuming=resuming)
         except TimeoutError:
             self._fail(
                 run,
@@ -235,11 +376,13 @@ class DesignRunOrchestrator:
             self._fail(run, "SIMULATION_ERROR", str(exc))
         except SimulationNotAvailable as exc:
             self._fail(run, "SIMULATION_UNAVAILABLE", str(exc))
+        except UnsupportedRequirementError as exc:
+            self._fail(run, "UNSUPPORTED_REQUIREMENT", str(exc))
         except Exception:
             logger.exception("Design run %s failed unexpectedly", run_id)
             self._fail(run, "INTERNAL_ERROR", "The design run failed unexpectedly.")
 
-    async def _run_pipeline(self, run: DesignRun) -> None:
+    async def _run_pipeline(self, run: DesignRun, *, resuming: bool = False) -> None:
         provider_calls: list[dict[str, Any]] = []
         engine_info: dict[str, Any] = {
             "name": "not_run",
@@ -247,16 +390,23 @@ class DesignRunOrchestrator:
             "time_basis": "normalized_cycle",
             "output_point": "rocker_pin",
         }
-        source = "meta_model" if self.meta_client.is_configured else "deterministic_fallback"
 
-        if self.meta_client.is_configured:
-            brief, completion = await parse_requirements(
-                run.original_prompt,
-                client=self.meta_client,
-            )
-            self._record_completion(provider_calls, "requirements", completion)
+        if resuming:
+            stored = self.artifacts.read_json(run.run_id, "brief.json")
+            source = stored["source"]
+            brief = NormalizedBrief.model_validate(stored["brief"])
         else:
-            brief = default_brief_from_prompt(run.original_prompt)
+            source = (
+                "meta_model" if self.meta_client.is_configured else "deterministic_fallback"
+            )
+            if self.meta_client.is_configured:
+                brief, completion = await parse_requirements(
+                    run.original_prompt,
+                    client=self.meta_client,
+                )
+                self._record_completion(provider_calls, "requirements", completion)
+            else:
+                brief = default_brief_from_prompt(run.original_prompt)
 
         self.artifacts.write_json(
             run.run_id,
@@ -272,8 +422,29 @@ class DesignRunOrchestrator:
                 "target_motion": brief.target_motion.model_dump(mode="json"),
                 "constraints": brief.constraints.model_dump(mode="json"),
                 "assumptions": brief.assumptions,
+                "unknowns": brief.unknowns,
+                "requirement_sources": {
+                    field: source.value for field, source in brief.requirement_sources.items()
+                },
+                "clarifications": run.clarification_answers,
             },
         )
+        blocking = [
+            question for question in brief.clarification_questions if question.blocking
+        ]
+        if blocking:
+            run.pending_clarifications = blocking
+            self._update_run(run, status=RunStatus.AWAITING_CLARIFICATION)
+            self.events.publish(
+                run.run_id,
+                RunEventName.CLARIFICATION_REQUIRED.value,
+                {
+                    "questions": [
+                        question.model_dump(mode="json") for question in blocking
+                    ],
+                },
+            )
+            return
         self._check_cancel(run)
 
         records: list[CandidateRecord] = []

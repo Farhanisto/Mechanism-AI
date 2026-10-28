@@ -3,6 +3,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+import pytest
 from app.ai.meta_client import (
     MetaModelRequestError,
     ModelCompletion,
@@ -333,3 +334,119 @@ async def test_completed_run_never_passes_with_unresolved_checks(tmp_path: Path)
     assert record.evaluation is not None
     assert record.evaluation.status.value == "failed"
     assert "simulation_integrity" in record.evaluation.failed_constraints
+
+
+BLOCKING_BRIEF_PAYLOAD: dict[str, Any] = {
+    "mechanism_type": "four_bar_linkage",
+    "units": "mm",
+    "target_motion": {
+        "type": "near_horizontal",
+        "travel_distance": 50.0,
+        "trajectory_tolerance": 5.0,
+    },
+    "constraints": {
+        "max_footprint": 200.0,
+        "complete_motion_cycle": True,
+        "avoid_collisions": True,
+    },
+    "assumptions": [],
+    "clarification_questions": [
+        {
+            "question_id": "q_travel",
+            "question": "How far should the output travel?",
+            "field": "target_motion.travel_distance",
+            "blocking": True,
+        }
+    ],
+    "unknowns": ["target_motion.travel_distance"],
+    "requirement_sources": {"target_motion.travel_distance": "default_assumption"},
+}
+
+
+async def test_blocking_questions_pause_the_run_until_answered(tmp_path: Path) -> None:
+    client = ScriptedMetaClient(
+        candidate_payloads=[candidate_payload(75, 30, 105, 75)],
+        brief_payload=BLOCKING_BRIEF_PAYLOAD,
+    )
+    orchestrator, broker = make_orchestrator(tmp_path, client)
+    run = orchestrator.create_run(
+        DesignRunCreateRequest(prompt=PROMPT, options={"max_candidates": 1})
+    )
+
+    await orchestrator.execute(run.run_id)
+
+    stored_run = orchestrator.store.get(run.run_id)
+    assert stored_run is not None
+    assert stored_run.status.value == "awaiting_clarification"
+    assert stored_run.stage.value == "parse_requirements"
+    assert [q.question_id for q in stored_run.pending_clarifications] == ["q_travel"]
+    assert orchestrator.store.list_candidates(run.run_id) == []
+
+    orchestrator.submit_clarifications(run.run_id, {"q_travel": "84"})
+    await orchestrator.execute(run.run_id)
+
+    stored_run = orchestrator.store.get(run.run_id)
+    assert stored_run is not None
+    assert stored_run.status.value == "completed"
+    assert stored_run.no_pass is False
+    assert stored_run.final_candidate_id == "candidate_001"
+    assert stored_run.clarification_answers == {"q_travel": "84"}
+
+    event_names = await replay_events(broker, run.run_id)
+    assert "clarification_required" in event_names
+    assert event_names.index("clarification_required") < event_names.index(
+        "candidate_generated"
+    )
+    assert event_names[-1] == "run_completed"
+
+    brief = orchestrator.artifacts.read_json(run.run_id, "brief.json")["brief"]
+    assert brief["target_motion"]["travel_distance"] == 84.0
+    assert brief["requirement_sources"]["target_motion.travel_distance"] == "user_provided"
+    assert brief["unknowns"] == []
+    evidence = orchestrator.artifacts.read_json(run.run_id, "evidence.json")
+    assert evidence["run"]["clarification_answers"] == {"q_travel": "84"}
+    assert evidence["requirements"]["brief"]["target_motion"]["travel_distance"] == 84.0
+
+
+async def test_unsupported_answer_fails_the_run_honestly(tmp_path: Path) -> None:
+    payload = {
+        **BLOCKING_BRIEF_PAYLOAD,
+        "clarification_questions": [
+            {
+                "question_id": "verification_scope",
+                "question": "Continue with kinematic checks only?",
+                "field": "verification_scope.kinematic_only",
+                "blocking": True,
+            }
+        ],
+    }
+    client = ScriptedMetaClient(candidate_payloads=[], brief_payload=payload)
+    orchestrator, _ = make_orchestrator(tmp_path, client)
+    run = orchestrator.create_run(DesignRunCreateRequest(prompt=PROMPT))
+    await orchestrator.execute(run.run_id)
+
+    updated = orchestrator.submit_clarifications(run.run_id, {"verification_scope": "no"})
+
+    assert updated.status.value == "failed"
+    assert updated.error_code == "UNSUPPORTED_REQUIREMENT"
+    assert orchestrator.store.list_candidates(run.run_id) == []
+
+
+async def test_invalid_clarification_answers_are_rejected(tmp_path: Path) -> None:
+    client = ScriptedMetaClient(
+        candidate_payloads=[], brief_payload=BLOCKING_BRIEF_PAYLOAD
+    )
+    orchestrator, _ = make_orchestrator(tmp_path, client)
+    run = orchestrator.create_run(DesignRunCreateRequest(prompt=PROMPT))
+    await orchestrator.execute(run.run_id)
+
+    with pytest.raises(ValueError, match="Unknown clarification ids"):
+        orchestrator.submit_clarifications(run.run_id, {"nope": "1"})
+    with pytest.raises(ValueError, match="Missing answers"):
+        orchestrator.submit_clarifications(run.run_id, {})
+    with pytest.raises(ValueError, match="number"):
+        orchestrator.submit_clarifications(run.run_id, {"q_travel": "very far"})
+
+    stored_run = orchestrator.store.get(run.run_id)
+    assert stored_run is not None
+    assert stored_run.status.value == "awaiting_clarification"

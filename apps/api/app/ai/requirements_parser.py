@@ -5,9 +5,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.ai.meta_client import MetaModelClient, ModelCompletion
 from app.mechanism.schemas import (
+    ClarificationQuestion,
     HardConstraints,
     MechanismType,
     NormalizedBrief,
+    RequirementSource,
     TargetMotion,
     TargetMotionType,
     Units,
@@ -24,6 +26,14 @@ _STANDARD_ASSUMPTIONS = (
     "Links are zero-thickness line segments; ground/frame contact is not a collision.",
 )
 _MM_PATTERN = re.compile(r"(?P<value>\d+(?:\.\d+)?)\s*mm", re.IGNORECASE)
+_UNSUPPORTED_CHECK_PATTERN = re.compile(
+    r"\b(load|loads|force|forces|weight|torque|stress|strength|temperature|pressure)\b",
+    re.IGNORECASE,
+)
+_UNMODELED_MOTION_PATTERN = re.compile(
+    r"\b(vertical|rotate|rotates|rotary|rotating|circular|spiral)\b",
+    re.IGNORECASE,
+)
 
 
 class TargetMotionProposal(BaseModel):
@@ -42,14 +52,78 @@ class ConstraintsProposal(BaseModel):
     avoid_collisions: bool
 
 
+class ClarificationQuestionProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question_id: str = Field(min_length=1, max_length=64)
+    question: str = Field(min_length=1, max_length=400)
+    field: str = Field(min_length=1, max_length=120)
+    blocking: bool = True
+
+
 class BriefProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mechanism_type: Literal["four_bar_linkage"]
-    units: Literal["mm"]
+    mechanism_type: Literal["four_bar_linkage"] = "four_bar_linkage"
+    units: Literal["mm"] = "mm"
     target_motion: TargetMotionProposal
     constraints: ConstraintsProposal
     assumptions: list[str]
+    unknowns: list[str] = Field(default_factory=list)
+    clarification_questions: list[ClarificationQuestionProposal] = Field(default_factory=list)
+    requirement_sources: dict[
+        str, Literal["user_provided", "ai_proposed", "default_assumption"]
+    ] = Field(default_factory=dict)
+
+
+def policy_clarification_questions(prompt: str) -> list[ClarificationQuestion]:
+    """Deterministic honesty floor: ask about anything the evaluator cannot verify.
+
+    These questions are asked in addition to any the model proposes; they pause
+    the run until the user answers because the answers materially change the
+    acceptance scope.
+    """
+    questions: list[ClarificationQuestion] = []
+    if _UNSUPPORTED_CHECK_PATTERN.search(prompt):
+        questions.append(
+            ClarificationQuestion(
+                question_id="verification_scope",
+                question=(
+                    "The request mentions loading or environmental conditions (for "
+                    "example load, force or temperature) that the current kinematic "
+                    "and geometric evaluator cannot verify. Continue with kinematic "
+                    "and geometric checks only?"
+                ),
+                field="verification_scope.kinematic_only",
+                blocking=True,
+            )
+        )
+    if _UNMODELED_MOTION_PATTERN.search(prompt):
+        questions.append(
+            ClarificationQuestion(
+                question_id="target_motion_type",
+                question=(
+                    "The request describes motion the evaluator does not model (for "
+                    "example vertical or continuous rotary motion). Should the output "
+                    "target be near-horizontal travel?"
+                ),
+                field="target_motion.type",
+                blocking=True,
+            )
+        )
+    return questions
+
+
+def _merge_questions(
+    proposed: list[ClarificationQuestion],
+    policy: list[ClarificationQuestion],
+) -> list[ClarificationQuestion]:
+    merged = list(proposed)
+    known_fields = {question.field for question in merged}
+    for question in policy:
+        if question.field not in known_fields:
+            merged.append(question)
+    return merged
 
 
 def _with_standard_assumptions(brief: NormalizedBrief) -> NormalizedBrief:
@@ -113,6 +187,30 @@ def default_brief_from_prompt(prompt: str) -> NormalizedBrief:
     if not found_tolerance:
         assumptions.append("Trajectory tolerance defaulted to 5 mm.")
 
+    requirement_sources = {
+        "target_motion.type": RequirementSource.DEFAULT_ASSUMPTION,
+        "target_motion.travel_distance": (
+            RequirementSource.USER_PROVIDED
+            if found_travel
+            else RequirementSource.DEFAULT_ASSUMPTION
+        ),
+        "target_motion.trajectory_tolerance": (
+            RequirementSource.USER_PROVIDED
+            if found_tolerance
+            else RequirementSource.DEFAULT_ASSUMPTION
+        ),
+        "constraints.max_footprint": (
+            RequirementSource.USER_PROVIDED
+            if found_footprint
+            else RequirementSource.DEFAULT_ASSUMPTION
+        ),
+    }
+    unknowns = [
+        field
+        for field, source in requirement_sources.items()
+        if source is RequirementSource.DEFAULT_ASSUMPTION and field != "target_motion.type"
+    ]
+
     return _with_standard_assumptions(
         NormalizedBrief(
             mechanism_type=MechanismType.FOUR_BAR_LINKAGE,
@@ -128,6 +226,9 @@ def default_brief_from_prompt(prompt: str) -> NormalizedBrief:
                 avoid_collisions=True,
             ),
             assumptions=assumptions,
+            unknowns=unknowns,
+            clarification_questions=policy_clarification_questions(prompt),
+            requirement_sources=requirement_sources,
         )
     )
 
@@ -143,5 +244,14 @@ async def parse_requirements(
         schema=BriefProposal.model_json_schema(),
         schema_name="normalized_brief",
     )
-    brief = NormalizedBrief.model_validate(completion.payload)
+    proposal = BriefProposal.model_validate(completion.payload)
+    brief = NormalizedBrief.model_validate(proposal.model_dump())
+    brief = brief.model_copy(
+        update={
+            "clarification_questions": _merge_questions(
+                brief.clarification_questions,
+                policy_clarification_questions(prompt),
+            )
+        }
+    )
     return _with_standard_assumptions(brief), completion

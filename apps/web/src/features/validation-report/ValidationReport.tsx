@@ -75,6 +75,25 @@ export function ValidationReport({
               </ul>
             </details>
           ) : null}
+          {briefArtifact.brief.unknowns && briefArtifact.brief.unknowns.length > 0 ? (
+            <p className="version-note">
+              Unknowns using documented defaults: {briefArtifact.brief.unknowns.join(", ")}
+            </p>
+          ) : null}
+          {briefArtifact.brief.requirement_sources ? (
+            <details>
+              <summary>Requirement provenance</summary>
+              <ul className="assumption-list">
+                {Object.entries(briefArtifact.brief.requirement_sources).map(
+                  ([field, source]) => (
+                    <li key={field}>
+                      {field}: {String(source).replaceAll("_", " ")}
+                    </li>
+                  ),
+                )}
+              </ul>
+            </details>
+          ) : null}
         </div>
       ) : null}
 

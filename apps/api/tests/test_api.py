@@ -185,3 +185,45 @@ def test_evidence_endpoint_returns_summary_report_and_manifest(client: TestClien
 
     missing = client.get("/api/v1/design-runs/run_missing/evidence")
     assert missing.status_code == 404
+
+
+def test_clarifications_pause_and_resume_without_an_ai_call(client: TestClient) -> None:
+    prompt = "Design a four-bar linkage with 100 mm of travel that can carry a heavy load."
+    run_id = client.post("/api/v1/design-runs", json={"prompt": prompt}).json()["run_id"]
+
+    run = client.get(f"/api/v1/design-runs/{run_id}").json()
+    assert run["status"] == "awaiting_clarification"
+    assert run["pending_clarifications"]
+    assert client.get(f"/api/v1/design-runs/{run_id}/candidates").json() == []
+
+    question_id = run["pending_clarifications"][0]["question_id"]
+    response = client.post(
+        f"/api/v1/design-runs/{run_id}/clarifications",
+        json={"answers": {question_id: "yes"}},
+    )
+
+    assert response.status_code == 202
+    run = client.get(f"/api/v1/design-runs/{run_id}").json()
+    assert run["status"] == "completed"
+    assert run["no_pass"] is False
+    assert run["clarification_answers"] == {question_id: "yes"}
+    evidence = client.get(f"/api/v1/design-runs/{run_id}/evidence").json()
+    assert evidence["evidence_bundle"]["run"]["clarification_answers"] == {
+        question_id: "yes"
+    }
+
+
+def test_clarifications_endpoint_conflicts(client: TestClient) -> None:
+    run_id = client.post("/api/v1/design-runs", json={"prompt": PROMPT}).json()["run_id"]
+
+    response = client.post(
+        f"/api/v1/design-runs/{run_id}/clarifications",
+        json={"answers": {"any": "yes"}},
+    )
+
+    assert response.status_code == 409
+    missing = client.post(
+        "/api/v1/design-runs/run_missing/clarifications",
+        json={"answers": {"any": "yes"}},
+    )
+    assert missing.status_code == 404

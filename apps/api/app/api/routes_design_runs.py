@@ -5,6 +5,7 @@ from fastapi.responses import StreamingResponse
 
 from app.mechanism.schemas import (
     CandidateRecord,
+    ClarificationsRequest,
     DesignRun,
     DesignRunCreateRequest,
     EvidenceBundle,
@@ -77,9 +78,35 @@ def list_candidates(run_id: str, request: Request) -> list[CandidateRecord]:
 def cancel_design_run(run_id: str, request: Request) -> DesignRun:
     orchestrator = _orchestrator(request)
     run = _require_run(orchestrator, run_id)
-    if run.status in (RunStatus.QUEUED, RunStatus.RUNNING):
-        orchestrator.request_cancel(run_id)
-        run = orchestrator.store.get(run_id) or run
+    return orchestrator.cancel_run(run)
+
+
+@router.post(
+    "/{run_id}/clarifications",
+    response_model=DesignRun,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def submit_clarifications(
+    payload: ClarificationsRequest,
+    background_tasks: BackgroundTasks,
+    run_id: str,
+    request: Request,
+) -> DesignRun:
+    orchestrator = _orchestrator(request)
+    run = _require_run(orchestrator, run_id)
+    if run.status is not RunStatus.AWAITING_CLARIFICATION or not run.pending_clarifications:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Design run is not awaiting clarification",
+        )
+    try:
+        run = orchestrator.submit_clarifications(run_id, payload.answers)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    if run.status is RunStatus.AWAITING_CLARIFICATION:
+        background_tasks.add_task(orchestrator.execute, run_id)
     return run
 
 
