@@ -1,12 +1,22 @@
-import type { Point2D, SimulationResult } from "../../lib/api";
+import { useEffect, useState } from "react";
+
+import type {
+  BriefArtifact,
+  CandidateMetrics,
+  Point2D,
+  SimulationResult,
+} from "../../lib/api";
 
 interface MechanismCanvasProps {
   simulation: SimulationResult | null;
+  brief: BriefArtifact | null;
+  metrics: CandidateMetrics | null;
 }
 
 const WIDTH = 640;
 const HEIGHT = 360;
 const PADDING = 52;
+const FRAME_MS = 40;
 
 function toSvgPoint(
   point: Point2D,
@@ -24,12 +34,32 @@ function formatNumber(value: number): string {
   return value.toFixed(1);
 }
 
-export function MechanismCanvas({ simulation }: MechanismCanvasProps) {
+export function MechanismCanvas({ simulation, brief, metrics }: MechanismCanvasProps) {
+  const samples = simulation?.samples ?? [];
+  const sampleCount = samples.length;
+  const [frame, setFrame] = useState(0);
+  const [playing, setPlaying] = useState(false);
+
+  useEffect(() => {
+    setFrame(0);
+    setPlaying(sampleCount > 0);
+  }, [simulation, sampleCount]);
+
+  useEffect(() => {
+    if (!playing || sampleCount === 0) {
+      return;
+    }
+    const timer = setInterval(() => {
+      setFrame((current) => (current + 1) % sampleCount);
+    }, FRAME_MS);
+    return () => clearInterval(timer);
+  }, [playing, sampleCount]);
+
   const headingHint = simulation
     ? `${simulation.engine} · output point = rocker pin`
-    : "Coordinates come from the deterministic reference solver";
+    : "Coordinates come from the persisted simulation trace";
 
-  if (!simulation || simulation.samples.length === 0) {
+  if (!simulation || sampleCount === 0) {
     return (
       <section className="panel">
         <div className="panel-heading">
@@ -54,7 +84,7 @@ export function MechanismCanvas({ simulation }: MechanismCanvasProps) {
             </text>
             <text x={WIDTH / 2} y={HEIGHT / 2 + 16} textAnchor="middle" className="canvas-subtext">
               {simulation?.failure_reason ??
-                "Run the reference kinematics pipeline to plot the final candidate."}
+                "Run the design pipeline to plot the final candidate."}
             </text>
           </g>
         </svg>
@@ -62,12 +92,12 @@ export function MechanismCanvas({ simulation }: MechanismCanvasProps) {
     );
   }
 
-  const samples = simulation.samples;
   const jointPoints = samples.flatMap((sample) => [
     sample.ground_pivot_a,
     sample.ground_pivot_b,
     sample.crank_pin,
     sample.rocker_pin,
+    sample.output_point,
   ]);
   const minX = Math.min(...jointPoints.map((point) => point.x));
   const maxX = Math.max(...jointPoints.map((point) => point.x));
@@ -90,11 +120,34 @@ export function MechanismCanvas({ simulation }: MechanismCanvasProps) {
     })
     .join(" ");
 
-  const pose = samples[0];
+  const current = samples[Math.min(frame, sampleCount - 1)];
+  const pose = current;
   const groundA = toSvg(pose.ground_pivot_a);
   const groundB = toSvg(pose.ground_pivot_b);
   const crankPin = toSvg(pose.crank_pin);
   const rockerPin = toSvg(pose.rocker_pin);
+  const outputNow = toSvg(pose.output_point);
+
+  const target = brief?.brief.target_motion ?? null;
+  const constraints = brief?.brief.constraints ?? null;
+  const centerMm = { x: minX + spanX / 2, y: minY + spanY / 2 };
+  const targetLine = target
+    ? {
+        from: toSvg({ x: centerMm.x - target.travel_distance / 2, y: centerMm.y }),
+        to: toSvg({ x: centerMm.x + target.travel_distance / 2, y: centerMm.y }),
+        bandTop: toSvg({ x: minX, y: centerMm.y + target.trajectory_tolerance }).y,
+        bandBottom: toSvg({ x: minX, y: centerMm.y - target.trajectory_tolerance }).y,
+      }
+    : null;
+
+  const dimensionY = toSvg({ x: minX, y: minY }).y + 26;
+  const dimensionLeft = toSvg({ x: minX, y: minY }).x;
+  const dimensionRight = toSvg({ x: maxX, y: minY }).x;
+  const footprintLabel = metrics
+    ? `footprint ${formatNumber(metrics.footprint_mm)} mm${
+        constraints ? ` (limit ${formatNumber(constraints.max_footprint)} mm)` : ""
+      }`
+    : `mechanism ${formatNumber(spanX)} mm wide`;
 
   return (
     <section className="panel">
@@ -106,7 +159,7 @@ export function MechanismCanvas({ simulation }: MechanismCanvasProps) {
         className="canvas"
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         role="img"
-        aria-label={`Four-bar linkage trace with ${samples.length} samples from the ${simulation.engine} engine`}
+        aria-label={`Four-bar linkage trace with ${sampleCount} samples from the ${simulation.engine} engine`}
       >
         <defs>
           <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
@@ -114,6 +167,34 @@ export function MechanismCanvas({ simulation }: MechanismCanvasProps) {
           </pattern>
         </defs>
         <rect width={WIDTH} height={HEIGHT} fill="url(#grid)" opacity="0.18" />
+
+        {targetLine ? (
+          <g>
+            <rect
+              x={dimensionLeft}
+              y={Math.min(targetLine.bandTop, targetLine.bandBottom)}
+              width={Math.max(dimensionRight - dimensionLeft, 1)}
+              height={Math.abs(targetLine.bandTop - targetLine.bandBottom)}
+              className="tolerance-band"
+            />
+            <line
+              x1={targetLine.from.x}
+              y1={targetLine.from.y}
+              x2={targetLine.to.x}
+              y2={targetLine.to.y}
+              className="target-path"
+            />
+            <text
+              x={targetLine.to.x}
+              y={targetLine.to.y - 8}
+              textAnchor="end"
+              className="dimension-label"
+            >
+              requested {formatNumber(target!.travel_distance)} mm near-horizontal
+              {target ? ` ±${formatNumber(target.trajectory_tolerance)} mm` : ""}
+            </text>
+          </g>
+        ) : null}
 
         <line
           x1={groundA.x}
@@ -150,6 +231,7 @@ export function MechanismCanvas({ simulation }: MechanismCanvasProps) {
         <circle cx={groundB.x} cy={groundB.y} r={6} className="joint" />
         <circle cx={crankPin.x} cy={crankPin.y} r={6} className="joint" />
         <circle cx={rockerPin.x} cy={rockerPin.y} r={7} className="joint joint-output" />
+        <circle cx={outputNow.x} cy={outputNow.y} r={4} className="output-marker" />
 
         <g className="joint-label">
           <text x={groundA.x - 10} y={groundA.y + 19} textAnchor="end">
@@ -162,33 +244,71 @@ export function MechanismCanvas({ simulation }: MechanismCanvasProps) {
             A
           </text>
           <text x={rockerPin.x + 9} y={rockerPin.y - 8}>
-            B
+            B (output)
+          </text>
+        </g>
+
+        <g className="dimension">
+          <line x1={dimensionLeft} y1={dimensionY} x2={dimensionRight} y2={dimensionY} />
+          <line x1={dimensionLeft} y1={dimensionY - 5} x2={dimensionLeft} y2={dimensionY + 5} />
+          <line x1={dimensionRight} y1={dimensionY - 5} x2={dimensionRight} y2={dimensionY + 5} />
+          <text
+            x={(dimensionLeft + dimensionRight) / 2}
+            y={dimensionY + 16}
+            textAnchor="middle"
+            className="dimension-label"
+          >
+            {footprintLabel}
           </text>
         </g>
 
         <g className="legend" transform="translate(18, 18)">
           <line x1={0} y1={0} x2={22} y2={0} className="trace-path" />
-          <text x={28} y={4}>output path</text>
-          <line x1={0} y1={16} x2={22} y2={16} className="link link-crank" />
-          <text x={28} y={20}>crank</text>
-          <line x1={0} y1={32} x2={22} y2={32} className="link link-coupler" />
-          <text x={28} y={36}>coupler</text>
-          <line x1={0} y1={48} x2={22} y2={48} className="link link-rocker" />
-          <text x={28} y={52}>rocker</text>
+          <text x={28} y={4}>actual output path</text>
+          <line x1={0} y1={16} x2={22} y2={16} className="target-path" />
+          <text x={28} y={20}>requested path</text>
+          <rect x={0} y={30} width={22} height={8} className="tolerance-band" />
+          <text x={28} y={38}>tolerance band</text>
+          <line x1={0} y1={54} x2={22} y2={54} className="link link-crank" />
+          <text x={28} y={58}>crank</text>
+          <line x1={0} y1={70} x2={22} y2={70} className="link link-coupler" />
+          <text x={28} y={74}>coupler</text>
+          <line x1={0} y1={86} x2={22} y2={86} className="link link-rocker" />
+          <text x={28} y={90}>rocker</text>
         </g>
 
         <g className="canvas-caption">
           <text x={18} y={HEIGHT - 18}>
-            Pose at {formatNumber(pose.input_angle_deg)}° · {samples.length} samples ·{" "}
-            {simulation.engine} {simulation.engine_version}
+            Pose at {formatNumber(pose.input_angle_deg)}° · sample {Math.min(frame, sampleCount - 1) + 1}/
+            {sampleCount} · {simulation.engine} {simulation.engine_version}
           </text>
           <text x={WIDTH - 18} y={HEIGHT - 18} textAnchor="end">
-            mechanism {formatNumber(spanX)} mm wide · cycle{" "}
-            {simulation.cycle_completed ? "complete" : "incomplete"} · collisions{" "}
+            cycle {simulation.cycle_completed ? "complete" : "incomplete"} · collisions{" "}
             {simulation.collision_free ? "none" : "detected"}
           </text>
         </g>
       </svg>
+
+      <div className="playback-controls">
+        <button type="button" onClick={() => setPlaying((value) => !value)}>
+          {playing ? "Pause" : "Play"}
+        </button>
+        <input
+          type="range"
+          min={0}
+          max={sampleCount - 1}
+          value={Math.min(frame, sampleCount - 1)}
+          onChange={(event) => {
+            setPlaying(false);
+            setFrame(Number(event.target.value));
+          }}
+          aria-label="Scrub through the computed motion"
+        />
+        <span className="playback-readout">
+          θ = {formatNumber(pose.input_angle_deg)}°
+          {metrics ? ` · travel ${formatNumber(metrics.travel_distance_mm)} mm` : ""}
+        </span>
+      </div>
     </section>
   );
 }

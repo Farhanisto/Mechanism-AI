@@ -1,13 +1,31 @@
 import { RunStatusPanel } from "./components/RunStatusPanel";
 import { CandidateHistory } from "./features/candidate-history/CandidateHistory";
 import { DesignInputForm } from "./features/design-input/DesignInputForm";
+import { EvidenceArtifacts } from "./features/evidence/EvidenceArtifacts";
 import { MechanismCanvas } from "./features/simulation/MechanismCanvas";
 import { ValidationReport } from "./features/validation-report/ValidationReport";
 import { useDesignRun } from "./lib/useDesignRun";
 
 export function App() {
-  const { run, events, candidates, briefArtifact, simulation, isStarting, error, start } =
-    useDesignRun();
+  const {
+    run,
+    events,
+    candidates,
+    briefArtifact,
+    simulation,
+    isStarting,
+    streamState,
+    error,
+    start,
+  } = useDesignRun();
+
+  const finalRecord =
+    (run?.final_candidate_id
+      ? candidates.find(
+          (record) => record.candidate.candidate_id === run.final_candidate_id,
+        )
+      : null) ?? candidates.at(-1);
+  const metrics = finalRecord?.evaluation?.metrics ?? null;
 
   return (
     <main className="app">
@@ -24,19 +42,21 @@ export function App() {
 
       <div className="layout layout-top">
         <DesignInputForm onSubmit={start} disabled={isStarting} />
-        <RunStatusPanel run={run} events={events} />
+        <RunStatusPanel run={run} events={events} streamState={streamState} />
       </div>
 
       <div className="layout">
-        <MechanismCanvas simulation={simulation} />
+        <MechanismCanvas simulation={simulation} brief={briefArtifact} metrics={metrics} />
         <ValidationReport
           run={run}
           candidates={candidates}
           briefArtifact={briefArtifact}
+          simulation={simulation}
         />
       </div>
 
       <CandidateHistory candidates={candidates} />
+      <EvidenceArtifacts run={run} candidates={candidates} />
 
       <footer className="app-footer">
         <span>Hackathon MVP scope: planar four-bar linkages, kinematic and geometric checks only.</span>

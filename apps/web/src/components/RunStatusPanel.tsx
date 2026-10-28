@@ -1,9 +1,18 @@
 import type { DesignRun, RunEvent } from "../lib/api";
+import type { RunStreamState } from "../lib/useDesignRun";
 
 interface RunStatusPanelProps {
   run: DesignRun | null;
   events: RunEvent[];
+  streamState: RunStreamState;
 }
+
+const STREAM_LABELS: Record<RunStreamState, string | null> = {
+  idle: null,
+  live: "live stream",
+  reconnecting: "reconnecting",
+  ended: "stream closed",
+};
 
 function describeEvent(event: RunEvent): string {
   const fields = ["stage", "status", "candidate_id", "error_code", "message"] as const;
@@ -14,18 +23,43 @@ function describeEvent(event: RunEvent): string {
   return parts.join(" · ");
 }
 
-export function RunStatusPanel({ run, events }: RunStatusPanelProps) {
+export function RunStatusPanel({ run, events, streamState }: RunStatusPanelProps) {
+  const streamLabel = STREAM_LABELS[streamState];
   return (
     <section className="panel">
       <div className="panel-heading">
         <h2>Run status</h2>
-        {run ? (
-          <div className="pill-group">
-            <span className={`pill pill-${run.status}`}>{run.status}</span>
-            {run.no_pass ? <span className="pill pill-failed">no pass</span> : null}
-          </div>
-        ) : null}
+        <div className="pill-group">
+          {streamLabel ? (
+            <span
+              className={`pill pill-stream-${streamState}`}
+              title={
+                streamState === "reconnecting"
+                  ? "The progress stream dropped; the run state is being re-fetched so no stale result is shown."
+                  : undefined
+              }
+            >
+              {streamLabel}
+            </span>
+          ) : null}
+          {run ? (
+            <>
+              <span className={`pill pill-${run.status}`}>{run.status}</span>
+              {run.no_pass ? <span className="pill pill-failed">no pass</span> : null}
+            </>
+          ) : null}
+        </div>
       </div>
+
+      {streamState === "reconnecting" ? (
+        <p className="notice notice-warning">
+          <strong>Reconnecting</strong>
+          <span>
+            The progress stream dropped. The run state shown here is re-fetched from the server,
+            so it is never presented as a fresh success while the stream is down.
+          </span>
+        </p>
+      ) : null}
 
       {run ? (
         <dl className="run-meta">

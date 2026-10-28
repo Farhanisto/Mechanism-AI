@@ -1,15 +1,22 @@
-import type { BriefArtifact, CandidateRecord, DesignRun } from "../../lib/api";
+import type {
+  BriefArtifact,
+  CandidateRecord,
+  DesignRun,
+  SimulationResult,
+} from "../../lib/api";
 
 interface ValidationReportProps {
   run: DesignRun | null;
   candidates: CandidateRecord[];
   briefArtifact: BriefArtifact | null;
+  simulation: SimulationResult | null;
 }
 
 export function ValidationReport({
   run,
   candidates,
   briefArtifact,
+  simulation,
 }: ValidationReportProps) {
   const finalRecord =
     (run?.final_candidate_id
@@ -114,6 +121,50 @@ export function ValidationReport({
             </ul>
           ) : null}
           <p className="version-note">Evaluator {evaluation.evaluator_version}</p>
+          {simulation ? (
+            <details className="sim-settings">
+              <summary>
+                Simulation settings · {simulation.engine} {simulation.engine_version}
+              </summary>
+              <ul>
+                <li>Time basis: {simulation.time_basis}</li>
+                {simulation.diagnostics?.compiler_version ? (
+                  <li>MJCF compiler: {simulation.diagnostics.compiler_version}</li>
+                ) : null}
+                {simulation.diagnostics?.solver ? (
+                  <li>
+                    Solver: {simulation.diagnostics.solver}
+                    {simulation.diagnostics.timestep_s != null
+                      ? ` · timestep ${simulation.diagnostics.timestep_s} s`
+                      : ""}
+                  </li>
+                ) : null}
+                {simulation.diagnostics?.max_loop_closure_error_mm != null ? (
+                  <li>
+                    Max loop-closure error:{" "}
+                    {simulation.diagnostics.max_loop_closure_error_mm.toExponential(2)} mm
+                  </li>
+                ) : null}
+                {simulation.diagnostics?.reference_comparison ? (
+                  <li>
+                    Reference comparison: max deviation{" "}
+                    {simulation.diagnostics.reference_comparison.max_deviation_mm.toExponential(
+                      2,
+                    )}{" "}
+                    mm (tolerance {simulation.diagnostics.reference_comparison.tolerance_mm} mm,{" "}
+                    {simulation.diagnostics.reference_comparison.within_tolerance
+                      ? "within tolerance"
+                      : "OUTSIDE tolerance"}
+                    )
+                  </li>
+                ) : null}
+                <li>
+                  Contacts: {simulation.diagnostics?.contacts_enabled ? "enabled" : "disabled"} ·
+                  samples {simulation.samples.length}
+                </li>
+              </ul>
+            </details>
+          ) : null}
         </>
       ) : (
         <p className="empty-state">

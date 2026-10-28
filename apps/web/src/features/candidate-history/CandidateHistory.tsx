@@ -48,6 +48,35 @@ export function CandidateHistory({ candidates }: CandidateHistoryProps) {
                 Attempt {candidate.attempt_number} · input {candidate.input_motion.start_angle_deg}°
                 to {candidate.input_motion.end_angle_deg}°
               </p>
+              {evaluation ? (
+                <dl className="candidate-metrics">
+                  <div>
+                    <dt>Travel</dt>
+                    <dd>{evaluation.metrics.travel_distance_mm.toFixed(1)} mm</dd>
+                  </div>
+                  <div>
+                    <dt>Footprint</dt>
+                    <dd>{evaluation.metrics.footprint_mm.toFixed(1)} mm</dd>
+                  </div>
+                  <div>
+                    <dt>Path dev.</dt>
+                    <dd>{evaluation.metrics.trajectory_error_mm.toFixed(1)} mm</dd>
+                  </div>
+                </dl>
+              ) : null}
+              {evaluation ? (
+                evaluation.failed_constraints.length > 0 ? (
+                  <ul className="chip-list">
+                    {evaluation.failed_constraints.map((constraint) => (
+                      <li key={constraint} className="chip chip-failed">
+                        {constraint}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <span className="chip chip-passed">all checks passed</span>
+                )
+              ) : null}
             </article>
           ))}
         </div>
