@@ -192,6 +192,29 @@ apps/
 docker-compose.yml
 ```
 
+## Demo script
+
+Scenario A, the verified four-bar path (measured end to end in the recorded rehearsal,
+`apps/api/benchmarks/README.md`, 6-11 seconds per run):
+
+1. Enter a linkage request, e.g. "Design a compact four-bar linkage with ~100 mm
+   near-horizontal travel in a 200 mm footprint" (candidate budget 1-3).
+2. Show the parsed requirements and their labelled assumptions in the report panel.
+3. Watch the run stages stream in the event log (parse -> generate -> simulate ->
+   evaluate -> repair -> report).
+4. Show the candidate history: a failing candidate with its measured misses and, when
+   the budget allows, the repaired candidate that passes.
+5. Open the validation report: measured metrics, failed constraints and the evaluator
+   version.
+6. Inspect the persisted evidence (`run`, `brief`, `candidates`, `simulation_*`,
+   `evidence` JSON artifacts) and note the engine, its version and settings.
+7. Repeat with an impossible prompt ("500 mm of travel inside a 100 mm footprint"):
+   the run completes as `no pass` with the conflicting constraints named - never a
+   fake success.
+
+Scenario B (broad mechanical prompts with clarification and capability routing) is
+part of the extension work tracked in issues #8-#14 and is not demoable yet.
+
 ## Honest claims
 
 A result from this system can only claim that a candidate passed the implemented kinematic and

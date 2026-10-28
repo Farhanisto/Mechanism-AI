@@ -57,6 +57,28 @@ Results (2026-10-29):
   (fewest failed constraints), never an error or a fake success.
 - Schema-invalid model output during repair fails the run explicitly.
 
+## Demo rehearsal log (2026-10-29)
+
+Configuration: `docker compose` (API + web) with a live Meta model key and the
+default `auto` engine (MuJoCo). Five consecutive runs of the demo prompt
+("Design a compact four-bar linkage that produces approximately 100 mm of
+near-horizontal movement and fits within a 200 mm footprint"):
+
+| # | duration | outcome |
+| --- | --- | --- |
+| 1 | 5.89 s | passed on attempt 1 |
+| 2 | 9.35 s | passed on attempt 2 (repair fixed `travel_distance`) |
+| 3 | 5.64 s | passed on attempt 1 |
+| 4 | 10.96 s | passed on attempt 2 |
+| 5 | 10.81 s | passed on attempt 3 (inside the budget) |
+
+- 5/5 consecutive runs completed without a critical failure; max 10.96 s,
+  mean 8.53 s against the under-60-second target (AC-10 for this set).
+- Impossible prompt ("500 mm of travel inside a 100 mm footprint") completed
+  as `no_pass` after three candidates in 21.13 s; every candidate failed with
+  named constraints and the run never claimed success.
+- Compose also verified end to end on alternate host ports (API 8100, web 5174).
+
 ## What these benchmarks do and do not measure
 
 - They validate the repair **path**: the loop consumes evaluator feedback,
