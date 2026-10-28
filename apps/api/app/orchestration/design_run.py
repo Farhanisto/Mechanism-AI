@@ -20,7 +20,7 @@ from app.ai.meta_client import (
 from app.ai.requirements_parser import default_brief_from_prompt, parse_requirements
 from app.evaluation.evaluator import EVALUATOR_VERSION, evaluate_candidate
 from app.evaluation.metrics import measure_simulation
-from app.mechanism.kinematics import KinematicsError
+from app.mechanism.kinematics import DEFAULT_SAMPLE_COUNT, KinematicsError
 from app.mechanism.schemas import (
     TERMINAL_EVENTS,
     CandidateRecord,
@@ -33,12 +33,8 @@ from app.mechanism.schemas import (
     Stage,
 )
 from app.persistence.artifacts import ArtifactStore
-from app.simulation.reference_runner import (
-    DEFAULT_SAMPLE_COUNT,
-    ENGINE_NAME,
-    ENGINE_VERSION,
-    run_reference_simulation,
-)
+from app.simulation.mujoco_runner import SimulationNotAvailable
+from app.simulation.runner import ENGINE_AUTO, run_candidate_simulation
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +138,7 @@ class DesignRunOrchestrator:
         meta_client: MetaModelClient | None = None,
         max_candidates: int = 3,
         max_run_seconds: float = 60.0,
+        simulation_engine: str = ENGINE_AUTO,
         limits: dict[str, Any] | None = None,
     ) -> None:
         self.store = store
@@ -150,6 +147,7 @@ class DesignRunOrchestrator:
         self.meta_client = meta_client or UnconfiguredMetaModelClient()
         self.max_candidates = max_candidates
         self.max_run_seconds = max_run_seconds
+        self.simulation_engine = simulation_engine
         self.limits = limits or {}
 
     def create_run(self, payload: DesignRunCreateRequest) -> DesignRun:
@@ -200,12 +198,20 @@ class DesignRunOrchestrator:
             )
         except KinematicsError as exc:
             self._fail(run, "SIMULATION_ERROR", str(exc))
+        except SimulationNotAvailable as exc:
+            self._fail(run, "SIMULATION_UNAVAILABLE", str(exc))
         except Exception:
             logger.exception("Design run %s failed unexpectedly", run_id)
             self._fail(run, "INTERNAL_ERROR", "The design run failed unexpectedly.")
 
     async def _run_pipeline(self, run: DesignRun) -> None:
         provider_calls: list[dict[str, Any]] = []
+        engine_info: dict[str, Any] = {
+            "name": "not_run",
+            "version": None,
+            "time_basis": "normalized_cycle",
+            "output_point": "rocker_pin",
+        }
         source = "meta_model" if self.meta_client.is_configured else "deterministic_fallback"
 
         if self.meta_client.is_configured:
@@ -265,7 +271,20 @@ class DesignRunOrchestrator:
             )
 
             self._update_run(run, stage=Stage.SIMULATE)
-            simulation = run_reference_simulation(candidate)
+            simulation = run_candidate_simulation(
+                candidate, engine=self.simulation_engine
+            )
+            if engine_info["name"] == "not_run":
+                engine_info = {
+                    "name": simulation.engine,
+                    "version": simulation.engine_version,
+                    "time_basis": simulation.time_basis,
+                    "output_point": "rocker_pin",
+                }
+                if simulation.diagnostics is not None:
+                    engine_info["settings"] = simulation.diagnostics.model_dump(
+                        mode="json", exclude={"reference_comparison"}
+                    )
             self.artifacts.write_json(
                 run.run_id,
                 f"simulation_{candidate.candidate_id}.json",
@@ -346,12 +365,7 @@ class DesignRunOrchestrator:
                     "source": source,
                     "brief": brief.model_dump(mode="json"),
                 },
-                "simulation_engine": {
-                    "name": ENGINE_NAME,
-                    "version": ENGINE_VERSION,
-                    "time_basis": "normalized_cycle",
-                    "output_point": "rocker_pin",
-                },
+                "simulation_engine": engine_info,
                 "limits": {
                     "max_candidates": run.max_candidates,
                     "max_run_seconds": self.max_run_seconds,

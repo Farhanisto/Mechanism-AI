@@ -27,8 +27,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         meta_client=meta_client,
         max_candidates=settings.max_candidates,
         max_run_seconds=settings.max_run_seconds,
+        simulation_engine=settings.simulation_engine,
         limits={
             "server_max_candidates": settings.max_candidates,
+            "simulation_engine": settings.simulation_engine,
             "meta_reasoning_effort": settings.meta_reasoning_effort,
             "meta_timeout_seconds": settings.meta_timeout_seconds,
             "meta_max_retries": settings.meta_max_retries,

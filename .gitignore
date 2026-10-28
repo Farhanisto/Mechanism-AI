@@ -222,3 +222,6 @@ __marimo__/
 # Mechanism AI
 data/
 node_modules/
+
+# MuJoCo warning log
+MUJOCO_LOG.TXT

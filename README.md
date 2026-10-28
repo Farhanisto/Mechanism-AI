@@ -17,6 +17,9 @@ Working today:
   into typed data only
 - Deterministic four-bar reference kinematics with full-cycle, collision, travel, footprint and
   near-horizontal path checks
+- MuJoCo closed-loop simulation (optional `sim` extra): deterministic versioned MJCF compiler,
+  kinematic crank drive with bounded settle steps, structured failures, and a reference-trajectory
+  comparison recorded per candidate
 - Meta Model API adapter (`muse-spark-1.3`) with strict JSON schemas, bounded retries and typed
   errors; mocked HTTP tests never call the live API
 - Deterministic offline fallback for briefs and candidates when no key is configured
@@ -29,11 +32,9 @@ Working today:
 
 Not wired yet:
 
-1. MuJoCo closed-loop simulation and trajectory comparison (Milestone 2). Runs are labelled
-   `reference_kinematics`, not MuJoCo.
-2. Physical link thickness, obstacle geometry and a broader collision model. The MVP checks
+1. Physical link thickness, obstacle geometry and a broader collision model. The MVP checks
    zero-thickness moving links and treats the ground link as a fixed frame.
-3. The full PRD benchmark suite and a formal physical-feasibility review.
+2. The full PRD benchmark suite and a formal physical-feasibility review.
 
 A candidate that fails evaluation produces a completed run with `no_pass: true`, not a fake
 success. Infrastructure and model failures use `run_failed` with a safe error code.
@@ -46,7 +47,7 @@ API:
 
 ```bash
 cd apps/api
-uv sync
+uv sync            # add --extra sim to enable the MuJoCo engine
 uv run uvicorn app.main:app --reload --port 8000
 ```
 
@@ -72,6 +73,9 @@ docker compose up --build
 - API: <http://localhost:8000>
 - Artifacts persist in the `mechanism-data` volume
 
+The API image includes the `sim` extra, so container runs use the MuJoCo engine unless
+`MECHANISM_AI_SIMULATION_ENGINE=reference` is set.
+
 `.env` is optional. Without `MECHANISM_AI_META_API_KEY`, runs use the deterministic offline
 fallback. With a key, the Meta adapter parses the brief and proposes candidates. The base URL and
 model default to `https://api.meta.ai/v1` and `muse-spark-1.3`.
@@ -84,6 +88,7 @@ All server settings use the `MECHANISM_AI_` prefix (see `.env.example`):
 | --- | --- | --- |
 | `MECHANISM_AI_ARTIFACTS_DIR` | `data/artifacts` | Root directory for JSON evidence bundles (relative to the API process) |
 | `MECHANISM_AI_MAX_CANDIDATES` | `3` | Server cap; per-run option is 1-3 |
+| `MECHANISM_AI_SIMULATION_ENGINE` | `auto` | `auto`, `reference` or `mujoco`; `auto` uses MuJoCo when the `sim` extra is installed |
 | `MECHANISM_AI_CORS_ORIGINS` | `["http://localhost:5173"]` | Allowed browser origins (JSON list) |
 | `MECHANISM_AI_META_API_BASE_URL` | `https://api.meta.ai/v1` | OpenAI-compatible provider base URL |
 | `MECHANISM_AI_META_API_KEY` | unset | Server-side provider key; unset enables the offline fallback |
@@ -98,6 +103,30 @@ All server settings use the `MECHANISM_AI_` prefix (see `.env.example`):
 API keys stay on the server. Model output is treated as untrusted data and validated with
 Pydantic; it is never executed. The default `minimal` reasoning effort keeps the demo within the
 60-second target; raise it for harder briefs at the cost of latency.
+
+## Simulation engines
+
+Every simulation artifact and event is labelled with the engine that produced it
+(`reference_kinematics` or `mujoco`), its version and its settings.
+
+- **Reference engine**: closed-form four-bar kinematics on one assembly branch. Used on its own
+  when the `sim` extra is not installed (including the Docker images), and as the comparison
+  baseline for MuJoCo.
+- **MuJoCo engine** (`uv sync --extra sim`): the candidate is compiled by a deterministic,
+  versioned `Candidate -> MJCF` compiler (no model-generated MJCF). The loop is closed with a
+  `connect` equality between the coupler end and the rocker tip in a reference configuration
+  assembled at the requested start angle. The input crank is driven kinematically: at each sample
+  it is pinned at the commanded angle and the loop is settled with at most 200 steps to a
+  0.0001 mm closure target. Solver settings: Newton, `implicitfast`, timestep 1 ms, equality
+  `solref (0.0021, 0.95)`, `solimp (1, 1, 0.001)`, contacts disabled (collision acceptance stays
+  with the evaluator's deterministic geometry checks).
+
+Comparison method: when MuJoCo produces a valid trace, the same candidate is replayed with the
+reference solver at identical normalized sampling, and the index-aligned Euclidean deviation
+between output points is recorded in `diagnostics.reference_comparison`. The documented tolerance
+is **0.05 mm**; observed deviation on the fallback linkages is below 0.001 mm. A candidate that
+cannot close the loop, turns non-finite, or is not assemblable at the start angle produces a
+structured `simulation_valid: false` result with a failure reason, never a crash.
 
 ## API
 
@@ -134,7 +163,9 @@ npm run build
 ```
 
 Evaluator, kinematics, parser and API tests run without a live model or simulator. The Meta
-adapter tests use `httpx.MockTransport`; a live smoke test is intentionally opt-in.
+adapter tests use `httpx.MockTransport`; a live smoke test is intentionally opt-in. Compiler,
+MuJoCo runner and reference-comparison tests run when the `sim` extra is installed and skip
+otherwise.
 
 ## Repository layout
 
@@ -145,7 +176,7 @@ apps/
       api/            # HTTP routes (design runs, artifacts, health)
       ai/             # Meta model protocol, requirement and candidate parsers
       mechanism/      # Pydantic schemas, reference kinematics, MJCF compiler
-      simulation/     # Reference runner now; MuJoCo runner arrives in Milestone 2
+      simulation/     # Engine selection, reference runner, MuJoCo runner, comparisons
       evaluation/     # Evaluator, metrics, geometry/collision checks
       orchestration/  # Run lifecycle, SSE broker, repair loop
       persistence/    # Atomic JSON artifact store
@@ -161,9 +192,10 @@ docker-compose.yml
 ## Honest claims
 
 A result from this system can only claim that a candidate passed the implemented kinematic and
-geometric checks under the saved configuration. The current engine is a deterministic reference
-solver, not MuJoCo: links are zero-thickness line segments, the ground link is a fixed frame,
-contact with the frame is not modeled, and the output point is the rocker pin. It cannot claim
-structural strength, fatigue safety, manufacturability, real-world collision safety, or physical
-fidelity. The UI and report surface assumptions, failed constraints, evaluator version and
-simulation settings; a no-pass run stays a no-pass run.
+geometric checks under the saved configuration. Simulation runs on the deterministic reference
+solver or on MuJoCo's closed-loop solver (each result is labelled with its engine and settings),
+but links are zero-thickness line segments, the ground link is a fixed frame, contact with the
+frame is not modeled, and the output point is the rocker pin. It cannot claim structural strength,
+fatigue safety, manufacturability, real-world collision safety, or physical fidelity. The UI and
+report surface assumptions, failed constraints, evaluator version and simulation settings; a
+no-pass run stays a no-pass run.

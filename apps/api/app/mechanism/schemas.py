@@ -89,6 +89,34 @@ class TraceSample(BaseModel):
     output_point: Point2D
 
 
+class ReferenceComparison(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reference_engine: str
+    reference_engine_version: str
+    sample_count: int
+    tolerance_mm: float
+    max_deviation_mm: float
+    mean_deviation_mm: float
+    within_tolerance: bool
+
+
+class SimulationDiagnostics(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    compiler_version: str | None = None
+    solver: str | None = None
+    timestep_s: float | None = None
+    settle_target_mm: float | None = None
+    settle_step_limit: int | None = None
+    max_settle_steps_used: int | None = None
+    max_loop_closure_error_mm: float | None = None
+    max_solver_iterations: int | None = None
+    contacts_enabled: bool = False
+    max_contacts: int = 0
+    reference_comparison: ReferenceComparison | None = None
+
+
 class SimulationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -101,6 +129,7 @@ class SimulationResult(BaseModel):
     collision_free: bool = False
     simulation_valid: bool = False
     failure_reason: str | None = None
+    diagnostics: SimulationDiagnostics | None = None
 
 
 class CandidateMetrics(BaseModel):

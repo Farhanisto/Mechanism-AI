@@ -37,7 +37,7 @@ class KinematicsError(ValueError):
     """Raised when a trace cannot be produced for an invalid solver request."""
 
 
-def _solve_rocker_pin(
+def solve_rocker_pin(
     crank_pin: Point,
     ground_pivot_b: Point,
     coupler_length: float,
@@ -110,7 +110,7 @@ def simulate_four_bar(
             parameters.crank_length * math.cos(radians),
             parameters.crank_length * math.sin(radians),
         )
-        intersections = _solve_rocker_pin(
+        intersections = solve_rocker_pin(
             crank_pin,
             ground_pivot_b,
             parameters.coupler_length,

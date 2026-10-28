@@ -3,7 +3,10 @@ from collections.abc import Iterator
 import pytest
 from app.config import get_settings
 from app.main import app
+from app.simulation.mujoco_runner import is_mujoco_available
 from fastapi.testclient import TestClient
+
+ENGINE_LABELS = {"reference": "reference_kinematics", "mujoco": "mujoco"}
 
 PROMPT = (
     "Design a compact four-bar linkage that produces approximately 100 mm of "
@@ -11,12 +14,20 @@ PROMPT = (
 )
 
 
+@pytest.fixture(params=["reference", "mujoco"])
+def engine_name(request: pytest.FixtureRequest) -> str:
+    if request.param == "mujoco" and not is_mujoco_available():
+        pytest.skip("mujoco is not installed")
+    return request.param
+
+
 @pytest.fixture
-def client(tmp_path, monkeypatch) -> Iterator[TestClient]:
+def client(engine_name: str, tmp_path, monkeypatch) -> Iterator[TestClient]:
     monkeypatch.setenv("MECHANISM_AI_ARTIFACTS_DIR", str(tmp_path))
     monkeypatch.setenv("MECHANISM_AI_META_API_KEY", "")
     monkeypatch.setenv("MECHANISM_AI_META_MODEL", "")
     monkeypatch.setenv("MECHANISM_AI_META_API_BASE_URL", "")
+    monkeypatch.setenv("MECHANISM_AI_SIMULATION_ENGINE", engine_name)
     get_settings.cache_clear()
     with TestClient(app) as test_client:
         yield test_client
@@ -82,7 +93,7 @@ def test_fallback_candidate_passes_the_demo_targets(client: TestClient) -> None:
     assert metrics["simulation_valid"] is True
 
 
-def test_run_artifacts_are_persisted(client: TestClient) -> None:
+def test_run_artifacts_are_persisted(client: TestClient, engine_name: str) -> None:
     run_id = client.post("/api/v1/design-runs", json={"prompt": PROMPT}).json()["run_id"]
 
     run_response = client.get(f"/api/v1/design-runs/{run_id}/artifacts/run.json")
@@ -97,7 +108,7 @@ def test_run_artifacts_are_persisted(client: TestClient) -> None:
     assert brief_response.status_code == 200
     assert brief_response.json()["source"] == "deterministic_fallback"
     assert simulation_response.status_code == 200
-    assert simulation_response.json()["engine"] == "reference_kinematics"
+    assert simulation_response.json()["engine"] == ENGINE_LABELS[engine_name]
     assert len(simulation_response.json()["samples"]) == 361
     assert evidence_response.status_code == 200
     assert evidence_response.json()["no_pass"] is False

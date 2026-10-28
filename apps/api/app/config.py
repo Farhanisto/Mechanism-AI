@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:5173"]
     max_candidates: int = Field(default=3, ge=1, le=3)
     max_run_seconds: float = Field(default=60.0, gt=0, le=600)
+    simulation_engine: Literal["auto", "reference", "mujoco"] = "auto"
     meta_api_base_url: str | None = None
     meta_api_key: SecretStr | None = None
     meta_model: str | None = None
