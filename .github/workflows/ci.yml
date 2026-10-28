@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  api:
+    name: API tests (py${{ matrix.python }}${{ matrix.sim && ' + mujoco' || '' }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.13"
+            sim: true
+          - python: "3.12"
+            sim: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install MuJoCo system libraries
+        if: matrix.sim
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libosmesa6
+      - name: Install dependencies
+        working-directory: apps/api
+        run: uv sync --frozen ${{ matrix.sim && '--extra sim' || '' }}
+      - name: Ruff
+        working-directory: apps/api
+        run: uv run --no-sync ruff check .
+      - name: Tests
+        working-directory: apps/api
+        run: uv run --no-sync pytest
+
+  web:
+    name: Web typecheck and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install dependencies
+        working-directory: apps/web
+        run: npm ci
+      - name: Typecheck
+        working-directory: apps/web
+        run: npm run typecheck
+      - name: Build
+        working-directory: apps/web
+        run: npm run build
+
+  docker:
+    name: Docker builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API image
+        run: docker build -f apps/api/Dockerfile -t mechanism-ai-api .
+      - name: Build web image
+        run: docker build -f apps/web/Dockerfile -t mechanism-ai-web .
