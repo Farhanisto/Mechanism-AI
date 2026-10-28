@@ -1,0 +1,126 @@
+import type { BriefArtifact, CandidateRecord, DesignRun } from "../../lib/api";
+
+interface ValidationReportProps {
+  run: DesignRun | null;
+  candidates: CandidateRecord[];
+  briefArtifact: BriefArtifact | null;
+}
+
+export function ValidationReport({
+  run,
+  candidates,
+  briefArtifact,
+}: ValidationReportProps) {
+  const finalRecord =
+    (run?.final_candidate_id
+      ? candidates.find(
+          (record) => record.candidate.candidate_id === run.final_candidate_id,
+        )
+      : null) ?? candidates.at(-1);
+  const evaluation = finalRecord?.evaluation ?? null;
+
+  return (
+    <section className="panel">
+      <div className="panel-heading">
+        <h2>Validation report</h2>
+        <span className="panel-hint">The evaluator owns pass/fail</span>
+      </div>
+
+      {run?.error_code ? (
+        <div className="notice notice-error">
+          <strong>{run.error_code}</strong>
+          <span>This run stopped honestly before producing an evaluated candidate.</span>
+        </div>
+      ) : null}
+
+      {run?.no_pass ? (
+        <div className="notice notice-warning">
+          <strong>No passing candidate</strong>
+          <span>
+            The best attempt is shown below. Failing the evaluator is a valid outcome; it is
+            not reported as a successful design.
+          </span>
+        </div>
+      ) : null}
+
+      {briefArtifact ? (
+        <div className="brief-summary">
+          <p>
+            <strong>
+              {briefArtifact.source === "meta_model" ? "Meta model brief" : "Fallback brief"}
+            </strong>
+            <span>
+              {briefArtifact.brief.target_motion.travel_distance.toFixed(0)} mm travel ·{" "}
+              {briefArtifact.brief.target_motion.trajectory_tolerance.toFixed(0)} mm
+              tolerance · {briefArtifact.brief.constraints.max_footprint.toFixed(0)} mm
+              footprint
+            </span>
+          </p>
+          {briefArtifact.brief.assumptions.length > 0 ? (
+            <details>
+              <summary>
+                Assumptions ({briefArtifact.brief.assumptions.length})
+              </summary>
+              <ul className="assumption-list">
+                {briefArtifact.brief.assumptions.map((assumption) => (
+                  <li key={assumption}>{assumption}</li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
+        </div>
+      ) : null}
+
+      {evaluation ? (
+        <>
+          <div className={`status-line status-${evaluation.status}`}>
+            <span className="status-dot" />
+            <strong>{evaluation.status.toUpperCase()}</strong>
+            <span>{evaluation.candidate_id}</span>
+          </div>
+          <table className="metrics-table">
+            <tbody>
+              <tr>
+                <th>Travel distance</th>
+                <td>{evaluation.metrics.travel_distance_mm.toFixed(2)} mm</td>
+              </tr>
+              <tr>
+                <th>Footprint</th>
+                <td>{evaluation.metrics.footprint_mm.toFixed(2)} mm</td>
+              </tr>
+              <tr>
+                <th>Trajectory error</th>
+                <td>{evaluation.metrics.trajectory_error_mm.toFixed(2)} mm</td>
+              </tr>
+              <tr>
+                <th>Cycle completed</th>
+                <td>{evaluation.metrics.cycle_completed ? "yes" : "no"}</td>
+              </tr>
+              <tr>
+                <th>Collision-free</th>
+                <td>{evaluation.metrics.collision_free ? "yes" : "no"}</td>
+              </tr>
+              <tr>
+                <th>Simulation valid</th>
+                <td>{evaluation.metrics.simulation_valid ? "yes" : "no"}</td>
+              </tr>
+            </tbody>
+          </table>
+          {evaluation.failed_constraints.length > 0 ? (
+            <ul className="failure-list">
+              {evaluation.diagnostic_notes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          ) : null}
+          <p className="version-note">Evaluator {evaluation.evaluator_version}</p>
+        </>
+      ) : (
+        <p className="empty-state">
+          No evaluation yet. Results will show the measured metrics, failed constraints and
+          evaluator version for each candidate.
+        </p>
+      )}
+    </section>
+  );
+}

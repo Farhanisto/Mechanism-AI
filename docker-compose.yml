@@ -1,0 +1,43 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      MECHANISM_AI_ARTIFACTS_DIR: /app/data/artifacts
+      MECHANISM_AI_CORS_ORIGINS: '["http://localhost:5173"]'
+      MECHANISM_AI_MAX_CANDIDATES: ${MECHANISM_AI_MAX_CANDIDATES:-3}
+      MECHANISM_AI_META_API_BASE_URL: ${MECHANISM_AI_META_API_BASE_URL:-}
+      MECHANISM_AI_META_API_KEY: ${MECHANISM_AI_META_API_KEY:-}
+      MECHANISM_AI_META_MODEL: ${MECHANISM_AI_META_MODEL:-}
+      MECHANISM_AI_META_REASONING_EFFORT: ${MECHANISM_AI_META_REASONING_EFFORT:-minimal}
+      MECHANISM_AI_META_TIMEOUT_SECONDS: ${MECHANISM_AI_META_TIMEOUT_SECONDS:-45}
+      MECHANISM_AI_META_MAX_RETRIES: ${MECHANISM_AI_META_MAX_RETRIES:-1}
+      MECHANISM_AI_META_MAX_OUTPUT_TOKENS: ${MECHANISM_AI_META_MAX_OUTPUT_TOKENS:-2048}
+    volumes:
+      - mechanism-data:/app/data
+    ports:
+      - "${MECHANISM_AI_API_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=2)
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${MECHANISM_AI_WEB_PORT:-5173}:80"
+
+volumes:
+  mechanism-data:
