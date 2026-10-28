@@ -3,8 +3,17 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
-from app.mechanism.schemas import CandidateRecord, DesignRun, DesignRunCreateRequest
-from app.orchestration.design_run import DesignRunOrchestrator
+from app.mechanism.schemas import (
+    CandidateRecord,
+    DesignRun,
+    DesignRunCreateRequest,
+    EvidenceBundle,
+    RunStatus,
+)
+from app.orchestration.design_run import (
+    DesignRunOrchestrator,
+    render_evidence_report,
+)
 
 router = APIRouter(prefix="/design-runs", tags=["design-runs"])
 
@@ -62,3 +71,47 @@ def list_candidates(run_id: str, request: Request) -> list[CandidateRecord]:
     orchestrator = _orchestrator(request)
     _require_run(orchestrator, run_id)
     return orchestrator.store.list_candidates(run_id)
+
+
+@router.post("/{run_id}/cancel", response_model=DesignRun)
+def cancel_design_run(run_id: str, request: Request) -> DesignRun:
+    orchestrator = _orchestrator(request)
+    run = _require_run(orchestrator, run_id)
+    if run.status in (RunStatus.QUEUED, RunStatus.RUNNING):
+        orchestrator.request_cancel(run_id)
+        run = orchestrator.store.get(run_id) or run
+    return run
+
+
+@router.get("/{run_id}/evidence")
+def design_run_evidence(run_id: str, request: Request) -> dict:
+    orchestrator = _orchestrator(request)
+    run = _require_run(orchestrator, run_id)
+    candidates = orchestrator.store.list_candidates(run_id)
+    bundle_raw = orchestrator.artifacts.read_json(run_id, "evidence.json")
+    bundle = (
+        EvidenceBundle.model_validate(bundle_raw) if bundle_raw is not None else None
+    )
+    manifest = [
+        entry.model_dump(mode="json") for entry in orchestrator.artifacts.manifest(run_id)
+    ]
+    return {
+        "summary": {
+            "run_id": run.run_id,
+            "status": run.status.value,
+            "stage": run.stage.value,
+            "error_code": run.error_code,
+            "no_pass": run.no_pass,
+            "final_candidate_id": run.final_candidate_id,
+            "outcome": (
+                bundle.outcome
+                if bundle is not None
+                else ("failed" if run.status is RunStatus.FAILED else run.status.value)
+            ),
+            "evaluator_version": bundle.evaluator_version if bundle is not None else None,
+            "candidate_count": len(candidates),
+        },
+        "report": render_evidence_report(run, candidates, bundle),
+        "manifest": manifest,
+        "evidence_bundle": bundle_raw,
+    }

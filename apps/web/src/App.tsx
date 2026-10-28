@@ -17,6 +17,7 @@ export function App() {
     streamState,
     error,
     start,
+    cancel,
   } = useDesignRun();
 
   const finalRecord =
@@ -42,7 +43,7 @@ export function App() {
 
       <div className="layout layout-top">
         <DesignInputForm onSubmit={start} disabled={isStarting} />
-        <RunStatusPanel run={run} events={events} streamState={streamState} />
+        <RunStatusPanel run={run} events={events} streamState={streamState} onCancel={() => void cancel()} />
       </div>
 
       <div className="layout">

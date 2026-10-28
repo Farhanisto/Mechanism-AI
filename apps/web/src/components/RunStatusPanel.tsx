@@ -5,6 +5,7 @@ interface RunStatusPanelProps {
   run: DesignRun | null;
   events: RunEvent[];
   streamState: RunStreamState;
+  onCancel: () => void;
 }
 
 const STREAM_LABELS: Record<RunStreamState, string | null> = {
@@ -23,8 +24,9 @@ function describeEvent(event: RunEvent): string {
   return parts.join(" · ");
 }
 
-export function RunStatusPanel({ run, events, streamState }: RunStatusPanelProps) {
+export function RunStatusPanel({ run, events, streamState, onCancel }: RunStatusPanelProps) {
   const streamLabel = STREAM_LABELS[streamState];
+  const cancellable = run?.status === "queued" || run?.status === "running";
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -46,6 +48,11 @@ export function RunStatusPanel({ run, events, streamState }: RunStatusPanelProps
             <>
               <span className={`pill pill-${run.status}`}>{run.status}</span>
               {run.no_pass ? <span className="pill pill-failed">no pass</span> : null}
+              {cancellable ? (
+                <button type="button" className="cancel-button" onClick={onCancel}>
+                  Cancel run
+                </button>
+              ) : null}
             </>
           ) : null}
         </div>

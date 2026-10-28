@@ -64,7 +64,7 @@ def test_events_replay_for_finished_run(client: TestClient) -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert "event: run_started" in response.text
-    assert "event: requirements_parsed" in response.text
+    assert "event: requirements_ready" in response.text
     assert "event: candidate_generated" in response.text
     assert "event: simulation_completed" in response.text
     assert "event: evaluation_completed" in response.text
@@ -151,3 +151,37 @@ def test_invalid_prompt_is_rejected(client: TestClient) -> None:
     response = client.post("/api/v1/design-runs", json={"prompt": ""})
 
     assert response.status_code == 422
+
+
+def test_cancel_endpoint_is_idempotent(client: TestClient) -> None:
+    run_id = client.post("/api/v1/design-runs", json={"prompt": PROMPT}).json()["run_id"]
+
+    response = client.post(f"/api/v1/design-runs/{run_id}/cancel")
+
+    assert response.status_code == 200
+    assert response.json()["status"] in ("completed", "cancelled")
+
+    missing = client.post("/api/v1/design-runs/run_missing/cancel")
+    assert missing.status_code == 404
+
+
+def test_evidence_endpoint_returns_summary_report_and_manifest(client: TestClient) -> None:
+    run_id = client.post("/api/v1/design-runs", json={"prompt": PROMPT}).json()["run_id"]
+
+    response = client.get(f"/api/v1/design-runs/{run_id}/evidence")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["run_id"] == run_id
+    assert payload["summary"]["outcome"] == "passed"
+    assert payload["summary"]["evaluator_version"]
+    assert payload["report"].startswith("Mechanism AI evidence report")
+    assert "Limitations:" in payload["report"]
+    assert payload["evidence_bundle"]["outcome"] == "passed"
+    names = {entry["name"] for entry in payload["manifest"]}
+    assert {"run.json", "brief.json", "candidates.json", "evidence.json"} <= names
+    for entry in payload["manifest"]:
+        assert len(entry["sha256"]) == 64
+
+    missing = client.get("/api/v1/design-runs/run_missing/evidence")
+    assert missing.status_code == 404

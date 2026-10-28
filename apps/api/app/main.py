@@ -9,6 +9,7 @@ from app.api import routes_artifacts, routes_design_runs, routes_health
 from app.config import get_settings
 from app.orchestration.design_run import DesignRunOrchestrator, EventBroker, RunStore
 from app.persistence.artifacts import ArtifactStore
+from app.persistence.metadata import MetadataStore
 
 API_VERSION = "0.1.0"
 
@@ -16,8 +17,9 @@ API_VERSION = "0.1.0"
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
-    artifacts = ArtifactStore(settings.artifacts_dir)
-    store = RunStore(artifacts)
+    metadata = MetadataStore(settings.artifacts_dir / "metadata.sqlite3")
+    artifacts = ArtifactStore(settings.artifacts_dir, metadata=metadata)
+    store = RunStore(artifacts, metadata=metadata)
     events = EventBroker()
     meta_client = build_meta_client(settings)
     app.state.orchestrator = DesignRunOrchestrator(
@@ -42,6 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await meta_client.aclose()
+        metadata.close()
 
 
 def create_app() -> FastAPI:

@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,6 +33,38 @@ class HardConstraints(BaseModel):
     avoid_collisions: bool = True
 
 
+class RequirementSource(StrEnum):
+    USER_PROVIDED = "user_provided"
+    AI_PROPOSED = "ai_proposed"
+    DEFAULT_ASSUMPTION = "default_assumption"
+
+
+class ClarificationQuestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question_id: str
+    question: str
+    field: str
+    blocking: bool = True
+
+
+class CapabilitySupport(StrEnum):
+    SUPPORTED = "supported"
+    PARTIAL = "partial"
+    NOT_SUPPORTED = "not_supported"
+    ERROR = "error"
+
+
+class CapabilityAssessment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    capability_id: str
+    capability_version: str
+    status: CapabilitySupport
+    unsupported_requirements: list[str] = Field(default_factory=list)
+    unavailable_checks: list[str] = Field(default_factory=list)
+
+
 class NormalizedBrief(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -41,6 +74,10 @@ class NormalizedBrief(BaseModel):
     constraints: HardConstraints
     assumptions: list[str] = Field(default_factory=list)
     evaluator_config: dict[str, float | int | str | bool] = Field(default_factory=dict)
+    unknowns: list[str] = Field(default_factory=list)
+    clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
+    requirement_sources: dict[str, RequirementSource] = Field(default_factory=dict)
+    capability_assessment: CapabilityAssessment | None = None
 
 
 class FourBarParameters(BaseModel):
@@ -68,6 +105,7 @@ class Candidate(BaseModel):
     input_motion: InputMotion
     generated_at: datetime
     attempt_number: int = Field(ge=1, le=10)
+    geometry_artifact_id: str | None = None
 
 
 class Point2D(BaseModel):
@@ -129,6 +167,7 @@ class SimulationResult(BaseModel):
     collision_free: bool = False
     simulation_valid: bool = False
     failure_reason: str | None = None
+    warnings: list[str] = Field(default_factory=list)
     diagnostics: SimulationDiagnostics | None = None
 
 
@@ -172,6 +211,7 @@ class RunStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class Stage(StrEnum):
@@ -185,6 +225,7 @@ class Stage(StrEnum):
     REPORT = "report"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class DesignRun(BaseModel):
@@ -208,24 +249,132 @@ class DesignRunOptions(BaseModel):
     max_candidates: int = Field(default=3, ge=1, le=3)
 
 
+class UserMode(StrEnum):
+    BEGINNER = "beginner"
+    EXPERT = "expert"
+
+
+class PreviewMode(StrEnum):
+    CONCEPT = "concept"
+    CAD = "cad"
+    MOTION = "motion"
+
+
 class DesignRunCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     prompt: str = Field(min_length=1, max_length=4000)
+    user_mode: UserMode = UserMode.BEGINNER
+    preview_modes: list[PreviewMode] = Field(default_factory=list)
+    units: Units = Units.MM
     options: DesignRunOptions = Field(default_factory=DesignRunOptions)
 
 
 class RunEventName(StrEnum):
     RUN_STARTED = "run_started"
-    REQUIREMENTS_PARSED = "requirements_parsed"
+    REQUIREMENTS_READY = "requirements_ready"
     CANDIDATE_GENERATED = "candidate_generated"
     SIMULATION_COMPLETED = "simulation_completed"
     EVALUATION_COMPLETED = "evaluation_completed"
     REPAIR_STARTED = "repair_started"
+    ARTIFACT_READY = "artifact_ready"
     RUN_COMPLETED = "run_completed"
     RUN_FAILED = "run_failed"
+    RUN_CANCELLED = "run_cancelled"
 
 
 TERMINAL_EVENTS: frozenset[RunEventName] = frozenset(
-    {RunEventName.RUN_COMPLETED, RunEventName.RUN_FAILED}
+    {RunEventName.RUN_COMPLETED, RunEventName.RUN_FAILED, RunEventName.RUN_CANCELLED}
 )
+
+
+class PlanComponent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    component_id: str
+    kind: str
+    parameters: dict[str, float] = Field(default_factory=dict)
+    material: str | None = None
+
+
+class PlanJoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    joint_id: str
+    kind: Literal["revolute", "prismatic", "fixed", "free"]
+    parent: str
+    child: str
+    origin: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    axis: tuple[float, float, float] = (0.0, 0.0, 1.0)
+    limits_deg: tuple[float, float] | None = None
+
+
+class PlanGeometryOp(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation: str
+    component_id: str | None = None
+    parameters: dict[str, float | int | str | bool] = Field(default_factory=dict)
+
+
+class DesignPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    capability_id: str
+    capability_version: str
+    components: list[PlanComponent] = Field(default_factory=list)
+    joints: list[PlanJoint] = Field(default_factory=list)
+    geometry_operations: list[PlanGeometryOp] = Field(default_factory=list)
+    required_checks: list[str] = Field(default_factory=list)
+    resource_budget: dict[str, float] = Field(default_factory=dict)
+
+
+class GeometryArtifact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: str
+    format: Literal["step", "stl", "mjcf", "svg"]
+    units: Units = Units.MM
+    compiler_version: str
+    generation_status: Literal["generated", "failed"]
+    validation_results: dict[str, bool] = Field(default_factory=dict)
+    artifact_hash: str | None = None
+    error: str | None = None
+
+
+class ArtifactManifestEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    sha256: str
+    size_bytes: int
+    written_at: str
+
+
+class SimulationEngineInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    version: str | None = None
+    time_basis: str = "normalized_cycle"
+    output_point: str = "rocker_pin"
+    settings: dict[str, Any] | None = None
+
+
+class EvidenceBundle(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run: DesignRun
+    prompt: str
+    requirements: dict[str, Any]
+    simulation_engine: SimulationEngineInfo
+    limits: dict[str, Any]
+    collision_model: str
+    evaluator_version: str
+    provider_calls: list[dict[str, Any]] = Field(default_factory=list)
+    candidates: list[CandidateRecord] = Field(default_factory=list)
+    final_candidate_id: str | None = None
+    no_pass: bool = False
+    outcome: str
+    limitations: list[str] = Field(default_factory=list)
+    manifest: list[ArtifactManifestEntry] = Field(default_factory=list)

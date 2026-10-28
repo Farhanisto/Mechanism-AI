@@ -27,12 +27,15 @@ from app.mechanism.schemas import (
     DesignRun,
     DesignRunCreateRequest,
     EvaluationStatus,
+    EvidenceBundle,
     NormalizedBrief,
     RunEventName,
     RunStatus,
+    SimulationEngineInfo,
     Stage,
 )
 from app.persistence.artifacts import ArtifactStore
+from app.persistence.metadata import MetadataStore
 from app.simulation.mujoco_runner import SimulationNotAvailable
 from app.simulation.runner import ENGINE_AUTO, run_candidate_simulation
 
@@ -40,6 +43,17 @@ logger = logging.getLogger(__name__)
 
 _KEEPALIVE_SECONDS = 15.0
 _TERMINAL_EVENT_NAMES = frozenset(name.value for name in TERMINAL_EVENTS)
+
+CLAIM_LIMITATIONS = [
+    "Links are modeled as zero-thickness line segments; the ground link is a fixed frame.",
+    "Collision checks cover moving links only; contact with the frame is not modeled.",
+    "Passing checks certify the implemented kinematic and geometric criteria only - not "
+    "structural strength, fatigue safety, manufacturability or real-world safety.",
+]
+
+
+class _RunCancelled(Exception):
+    """Raised internally when a run cancellation request is observed."""
 
 
 @dataclass(frozen=True)
@@ -94,8 +108,13 @@ class EventBroker:
 
 
 class RunStore:
-    def __init__(self, artifacts: ArtifactStore) -> None:
+    def __init__(
+        self,
+        artifacts: ArtifactStore,
+        metadata: MetadataStore | None = None,
+    ) -> None:
         self._artifacts = artifacts
+        self._metadata = metadata
         self._runs: dict[str, DesignRun] = {}
         self._candidates: dict[str, list[CandidateRecord]] = defaultdict(list)
 
@@ -118,10 +137,15 @@ class RunStore:
     def add_candidate(self, run_id: str, record: CandidateRecord) -> CandidateRecord:
         self._candidates[run_id].append(record)
         self._persist_candidates(run_id)
+        if self._metadata is not None:
+            self._metadata.record_candidate(run_id, record)
         return record
 
     def _persist(self, run_id: str) -> None:
-        self._artifacts.write_json(run_id, "run.json", self._runs[run_id])
+        run = self._runs[run_id]
+        self._artifacts.write_json(run_id, "run.json", run)
+        if self._metadata is not None:
+            self._metadata.record_run(run)
 
     def _persist_candidates(self, run_id: str) -> None:
         records = [record.model_dump(mode="json") for record in self._candidates[run_id]]
@@ -149,6 +173,15 @@ class DesignRunOrchestrator:
         self.max_run_seconds = max_run_seconds
         self.simulation_engine = simulation_engine
         self.limits = limits or {}
+        self._cancelled: set[str] = set()
+
+    def request_cancel(self, run_id: str) -> None:
+        """Request cooperative cancellation; the pipeline stops at its next checkpoint."""
+        self._cancelled.add(run_id)
+
+    def _check_cancel(self, run: DesignRun) -> None:
+        if run.run_id in self._cancelled:
+            raise _RunCancelled()
 
     def create_run(self, payload: DesignRunCreateRequest) -> DesignRun:
         now = datetime.now(UTC)
@@ -187,6 +220,8 @@ class DesignRunOrchestrator:
                 "RUN_TIMEOUT",
                 f"The design run exceeded its {self.max_run_seconds:.0f} second budget.",
             )
+        except _RunCancelled:
+            self._finish_cancelled(run)
         except MetaModelError as exc:
             self._fail(run, exc.error_code, str(exc))
         except ValidationError:
@@ -230,7 +265,7 @@ class DesignRunOrchestrator:
         )
         self.events.publish(
             run.run_id,
-            RunEventName.REQUIREMENTS_PARSED.value,
+            RunEventName.REQUIREMENTS_READY.value,
             {
                 "source": source,
                 "mechanism_type": brief.mechanism_type.value,
@@ -239,12 +274,14 @@ class DesignRunOrchestrator:
                 "assumptions": brief.assumptions,
             },
         )
+        self._check_cancel(run)
 
         records: list[CandidateRecord] = []
         previous: CandidateRecord | None = None
         passed_record: CandidateRecord | None = None
 
         for attempt in range(1, run.max_candidates + 1):
+            self._check_cancel(run)
             self._update_run(run, stage=Stage.GENERATE_CANDIDATE)
             if self.meta_client.is_configured:
                 candidate, completion = await generate_candidate(
@@ -355,31 +392,37 @@ class DesignRunOrchestrator:
             final_candidate_id=final_record.candidate.candidate_id,
             no_pass=no_pass,
         )
-        self.artifacts.write_json(
+        bundle = EvidenceBundle(
+            run=run,
+            prompt=run.original_prompt,
+            requirements={
+                "source": source,
+                "brief": brief.model_dump(mode="json"),
+            },
+            simulation_engine=SimulationEngineInfo(**engine_info),
+            limits={
+                "max_candidates": run.max_candidates,
+                "max_run_seconds": self.max_run_seconds,
+                "simulation_sample_count": DEFAULT_SAMPLE_COUNT,
+                **self.limits,
+            },
+            collision_model="moving_links_only_zero_thickness",
+            evaluator_version=EVALUATOR_VERSION,
+            provider_calls=provider_calls,
+            candidates=records,
+            final_candidate_id=final_record.candidate.candidate_id,
+            no_pass=no_pass,
+            outcome="no_pass" if no_pass else "passed",
+            limitations=CLAIM_LIMITATIONS,
+            manifest=self.artifacts.manifest(run.run_id),
+        )
+        self.artifacts.write_json(run.run_id, "evidence.json", bundle)
+        self.events.publish(
             run.run_id,
-            "evidence.json",
+            RunEventName.ARTIFACT_READY.value,
             {
-                "run": run.model_dump(mode="json"),
-                "prompt": run.original_prompt,
-                "requirements": {
-                    "source": source,
-                    "brief": brief.model_dump(mode="json"),
-                },
-                "simulation_engine": engine_info,
-                "limits": {
-                    "max_candidates": run.max_candidates,
-                    "max_run_seconds": self.max_run_seconds,
-                    "simulation_sample_count": DEFAULT_SAMPLE_COUNT,
-                    **self.limits,
-                },
-                "collision_model": "moving_links_only_zero_thickness",
-                "evaluator_version": EVALUATOR_VERSION,
-                "provider_calls": provider_calls,
-                "candidates": [
-                    record.model_dump(mode="json") for record in records
-                ],
-                "final_candidate_id": final_record.candidate.candidate_id,
-                "no_pass": no_pass,
+                "artifacts": [entry.name for entry in bundle.manifest]
+                + ["evidence.json"],
             },
         )
         self.events.publish(
@@ -482,3 +525,79 @@ class DesignRunOrchestrator:
                 "message": message,
             },
         )
+
+    def _finish_cancelled(self, run: DesignRun) -> None:
+        self._update_run(run, status=RunStatus.CANCELLED, stage=Stage.CANCELLED)
+        self.events.publish(
+            run.run_id,
+            RunEventName.RUN_CANCELLED.value,
+            {
+                "status": run.status.value,
+                "stage": run.stage.value,
+            },
+        )
+
+
+def render_evidence_report(
+    run: DesignRun,
+    candidates: list[CandidateRecord],
+    bundle: EvidenceBundle | None,
+) -> str:
+    """Render a human-readable evidence report for a run."""
+    lines = [
+        "Mechanism AI evidence report",
+        f"Run: {run.run_id}",
+        f"Prompt: {run.original_prompt}",
+        f"Status: {run.status.value}"
+        + (f" ({run.error_code})" if run.error_code else ""),
+        "Outcome: "
+        + (
+            "no valid candidate found"
+            if run.no_pass
+            else ("passed" if run.status is RunStatus.COMPLETED else run.status.value)
+        ),
+    ]
+    if bundle is not None:
+        engine = bundle.simulation_engine
+        lines.append(
+            f"Engine: {engine.name}"
+            + (f" {engine.version}" if engine.version else "")
+            + f" · evaluator {bundle.evaluator_version}"
+        )
+        lines.append(f"Requirements source: {bundle.requirements.get('source')}")
+    final = next(
+        (
+            record
+            for record in candidates
+            if record.candidate.candidate_id == run.final_candidate_id
+        ),
+        candidates[-1] if candidates else None,
+    )
+    if final is not None and final.evaluation is not None:
+        evaluation = final.evaluation
+        lines.append(
+            f"Final candidate: {final.candidate.candidate_id} "
+            f"(attempt {final.candidate.attempt_number}) - {evaluation.status.value}"
+        )
+        metrics = evaluation.metrics
+        lines.append(
+            f"Measured: travel {metrics.travel_distance_mm:.2f} mm · "
+            f"footprint {metrics.footprint_mm:.2f} mm · "
+            f"trajectory error {metrics.trajectory_error_mm:.2f} mm"
+        )
+        if evaluation.failed_constraints:
+            lines.append(
+                "Unresolved checks: " + ", ".join(evaluation.failed_constraints)
+            )
+        for note in evaluation.diagnostic_notes:
+            lines.append(f"- {note}")
+    if bundle is not None:
+        if bundle.manifest:
+            lines.append("Artifacts:")
+            lines.extend(
+                f"- {entry.name} (sha256 {entry.sha256[:12]}…)" for entry in bundle.manifest
+            )
+        if bundle.limitations:
+            lines.append("Limitations:")
+            lines.extend(f"- {item}" for item in bundle.limitations)
+    return "\n".join(lines)

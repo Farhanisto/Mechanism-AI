@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -6,8 +7,13 @@ from app.ai.meta_client import (
     MetaModelRequestError,
     ModelCompletion,
 )
+from app.evaluation.evaluator import evaluate_candidate
 from app.mechanism.kinematics import KinematicsError
-from app.mechanism.schemas import DesignRunCreateRequest
+from app.mechanism.schemas import (
+    DesignRunCreateRequest,
+    EvidenceBundle,
+    NormalizedBrief,
+)
 from app.orchestration.design_run import DesignRunOrchestrator, EventBroker, RunStore
 from app.persistence.artifacts import ArtifactStore
 
@@ -141,8 +147,9 @@ async def test_ai_pipeline_repairs_a_failed_candidate(tmp_path: Path) -> None:
     assert candidates[1].evaluation.status.value == "passed"
 
     event_names = await replay_events(broker, run.run_id)
-    assert "requirements_parsed" in event_names
+    assert "requirements_ready" in event_names
     assert "repair_started" in event_names
+    assert "artifact_ready" in event_names
     assert event_names[-1] == "run_completed"
     assert "run_failed" not in event_names
 
@@ -240,3 +247,89 @@ async def test_ai_pipeline_marks_run_failed_on_simulation_error(
 
     event_names = await replay_events(broker, run.run_id)
     assert event_names[-1] == "run_failed"
+
+
+async def test_cancel_request_stops_the_pipeline(tmp_path: Path) -> None:
+    client = ScriptedMetaClient(
+        candidate_payloads=[candidate_payload(95, 35, 135, 100)], delay_s=0.25
+    )
+    orchestrator, broker = make_orchestrator(tmp_path, client)
+    run = orchestrator.create_run(DesignRunCreateRequest(prompt=PROMPT))
+    orchestrator.request_cancel(run.run_id)
+
+    await orchestrator.execute(run.run_id)
+
+    stored_run = orchestrator.store.get(run.run_id)
+    assert stored_run is not None
+    assert stored_run.status.value == "cancelled"
+    assert stored_run.stage.value == "cancelled"
+    assert orchestrator.store.list_candidates(run.run_id) == []
+
+    event_names = await replay_events(broker, run.run_id)
+    assert event_names[-1] == "run_cancelled"
+    assert "run_completed" not in event_names
+
+
+async def test_event_order_matches_the_contract(tmp_path: Path) -> None:
+    client = ScriptedMetaClient(candidate_payloads=[candidate_payload(95, 35, 135, 100)])
+    orchestrator, broker = make_orchestrator(tmp_path, client)
+    run = orchestrator.create_run(DesignRunCreateRequest(prompt=PROMPT))
+
+    await orchestrator.execute(run.run_id)
+
+    event_names = await replay_events(broker, run.run_id)
+    assert event_names == [
+        "run_started",
+        "requirements_ready",
+        "candidate_generated",
+        "simulation_completed",
+        "evaluation_completed",
+        "artifact_ready",
+        "run_completed",
+    ]
+
+
+async def test_evidence_bundle_is_reconstructable(tmp_path: Path) -> None:
+    client = ScriptedMetaClient(candidate_payloads=[candidate_payload(95, 35, 135, 100)])
+    orchestrator, _ = make_orchestrator(tmp_path, client)
+    run = orchestrator.create_run(DesignRunCreateRequest(prompt=PROMPT))
+
+    await orchestrator.execute(run.run_id)
+
+    evidence = orchestrator.artifacts.read_json(run.run_id, "evidence.json")
+    bundle = EvidenceBundle.model_validate(evidence)
+    assert bundle.outcome == "passed"
+    assert bundle.limitations
+
+    for entry in bundle.manifest:
+        raw = (tmp_path / run.run_id / entry.name).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == entry.sha256
+        assert len(raw) == entry.size_bytes
+
+    record = bundle.candidates[-1]
+    assert record.evaluation is not None
+    brief = NormalizedBrief.model_validate(bundle.requirements["brief"])
+    re_evaluated = evaluate_candidate(
+        brief, record.evaluation.metrics, record.candidate.candidate_id
+    )
+    assert re_evaluated.status == record.evaluation.status
+    assert re_evaluated.failed_constraints == record.evaluation.failed_constraints
+
+
+async def test_completed_run_never_passes_with_unresolved_checks(tmp_path: Path) -> None:
+    client = ScriptedMetaClient(candidate_payloads=[candidate_payload(100, 60, 30, 25)])
+    orchestrator, _ = make_orchestrator(tmp_path, client)
+    run = orchestrator.create_run(
+        DesignRunCreateRequest(prompt=PROMPT, options={"max_candidates": 1})
+    )
+
+    await orchestrator.execute(run.run_id)
+
+    stored_run = orchestrator.store.get(run.run_id)
+    assert stored_run is not None
+    assert stored_run.status.value == "completed"
+    assert stored_run.no_pass is True
+    record = orchestrator.store.list_candidates(run.run_id)[0]
+    assert record.evaluation is not None
+    assert record.evaluation.status.value == "failed"
+    assert "simulation_integrity" in record.evaluation.failed_constraints

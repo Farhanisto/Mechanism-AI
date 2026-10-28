@@ -27,7 +27,8 @@ Working today:
 - Independent evaluator and path metrics, tested without any LLM call
 - Reviewed benchmark suites with recorded results: evaluator classification
   (pass/fail/boundary/invalid cases) and bounded repair (see `apps/api/benchmarks/`)
-- JSON evidence persistence per run: run, brief, candidates, simulations and evidence bundle
+- JSON evidence persistence per run: run, brief, candidates, simulations and evidence bundle,
+  with SHA-256 artifact hashes, timestamps and SQLite metadata for reconstruction
 - React + TypeScript + Vite UI with prompt form, live event log, validation report, candidate
   history and a rendered reference trace
 - Docker Compose setup for the API and web app
@@ -138,6 +139,8 @@ structured `simulation_valid: false` result with a failure reason, never a crash
 | `GET` | `/api/v1/design-runs/{run_id}` | Run status, stage, error code, final candidate |
 | `GET` | `/api/v1/design-runs/{run_id}/events` | SSE progress stream (replays history first) |
 | `GET` | `/api/v1/design-runs/{run_id}/candidates` | Candidate parameters and evaluations |
+| `GET` | `/api/v1/design-runs/{run_id}/evidence` | Evidence summary, human-readable report, artifact manifest with hashes |
+| `POST` | `/api/v1/design-runs/{run_id}/cancel` | Request cooperative cancellation (idempotent) |
 | `GET` | `/api/v1/design-runs/{run_id}/artifacts/{name}` | Persisted JSON artifact, e.g. `run.json` |
 | `GET` | `/api/v1/health` | Health check |
 
@@ -182,7 +185,7 @@ apps/
       simulation/     # Engine selection, reference runner, MuJoCo runner, comparisons
       evaluation/     # Evaluator, metrics, geometry/collision checks
       orchestration/  # Run lifecycle, SSE broker, repair loop
-      persistence/    # Atomic JSON artifact store
+      persistence/    # Atomic JSON artifact store and SQLite metadata
     tests/            # Schema, evaluator, metrics and API tests
   web/
     src/
