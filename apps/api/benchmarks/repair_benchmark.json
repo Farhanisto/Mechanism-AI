@@ -1,0 +1,84 @@
+{
+  "benchmark": "repair",
+  "version": "1.0",
+  "reviewed_on": "2026-10-29",
+  "notes": "Scripted repair benchmark: each case supplies the candidate sequence the model would propose and asserts the pipeline outcome under the unchanged evaluator. Repairable cases must end passed within three total candidates; unrepairable cases must end as an explicit no_pass with best-candidate reporting; failure paths must surface typed errors.",
+  "cases": [
+    {
+      "id": "passes_first_try",
+      "category": "baseline",
+      "description": "A good candidate needs no repair.",
+      "rationale": "The proposed candidate already satisfies every check, so the loop must stop after one attempt and report a pass.",
+      "brief": {
+        "target_motion": {"type": "near_horizontal", "travel_distance": 100.0, "trajectory_tolerance": 5.0},
+        "constraints": {"max_footprint": 200.0, "complete_motion_cycle": true, "avoid_collisions": true}
+      },
+      "candidate_sequence": [
+        {"parameters": {"ground_length": 95.0, "crank_length": 35.0, "coupler_length": 135.0, "rocker_length": 100.0}, "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0}}
+      ],
+      "expected": {"outcome": "passed", "attempts_used": 1, "final_candidate_id": "candidate_001"}
+    },
+    {
+      "id": "repair_in_one_attempt",
+      "category": "repairable",
+      "description": "First candidate undershoots travel; the repair fixes it.",
+      "rationale": "Candidate 1 (75/30/105/75) fails travel_distance by 15.78 mm. The evaluation feedback names the failed constraint and measured values; the revised candidate reaches 99.51 mm of travel and passes every check. Expected pass on attempt 2 of 3.",
+      "brief": {
+        "target_motion": {"type": "near_horizontal", "travel_distance": 100.0, "trajectory_tolerance": 5.0},
+        "constraints": {"max_footprint": 200.0, "complete_motion_cycle": true, "avoid_collisions": true}
+      },
+      "candidate_sequence": [
+        {"parameters": {"ground_length": 75.0, "crank_length": 30.0, "coupler_length": 105.0, "rocker_length": 75.0}, "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0}},
+        {"parameters": {"ground_length": 95.0, "crank_length": 35.0, "coupler_length": 135.0, "rocker_length": 100.0}, "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0}}
+      ],
+      "expected": {"outcome": "passed", "attempts_used": 2, "final_candidate_id": "candidate_002"}
+    },
+    {
+      "id": "repair_in_two_attempts",
+      "category": "repairable",
+      "description": "First repair overshoots; the second repair succeeds inside the budget.",
+      "rationale": "Candidate 1 fails travel_distance (84.22 mm); candidate 2 overcorrects to a colliding geometry with four failed checks; candidate 3 satisfies every check. Expected pass on attempt 3 of 3, proving the budget is used but not exceeded.",
+      "brief": {
+        "target_motion": {"type": "near_horizontal", "travel_distance": 100.0, "trajectory_tolerance": 5.0},
+        "constraints": {"max_footprint": 200.0, "complete_motion_cycle": true, "avoid_collisions": true}
+      },
+      "candidate_sequence": [
+        {"parameters": {"ground_length": 75.0, "crank_length": 30.0, "coupler_length": 105.0, "rocker_length": 75.0}, "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0}},
+        {"parameters": {"ground_length": 50.0, "crank_length": 150.0, "coupler_length": 160.0, "rocker_length": 160.0}, "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0}},
+        {"parameters": {"ground_length": 95.0, "crank_length": 35.0, "coupler_length": 135.0, "rocker_length": 100.0}, "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0}}
+      ],
+      "expected": {"outcome": "passed", "attempts_used": 3, "final_candidate_id": "candidate_003"}
+    },
+    {
+      "id": "not_repairable_exhausted",
+      "category": "not_repairable",
+      "description": "Every candidate fails; the run must end as an honest no-pass.",
+      "rationale": "All three candidates fail the unchanged evaluator. The run completes with no_pass=true and reports the best candidate (candidate_001, fewest failed constraints) with its unresolved failures - never an error and never a fake success.",
+      "brief": {
+        "target_motion": {"type": "near_horizontal", "travel_distance": 100.0, "trajectory_tolerance": 5.0},
+        "constraints": {"max_footprint": 200.0, "complete_motion_cycle": true, "avoid_collisions": true}
+      },
+      "candidate_sequence": [
+        {"parameters": {"ground_length": 75.0, "crank_length": 30.0, "coupler_length": 105.0, "rocker_length": 75.0}, "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0}},
+        {"parameters": {"ground_length": 50.0, "crank_length": 150.0, "coupler_length": 160.0, "rocker_length": 160.0}, "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0}},
+        {"parameters": {"ground_length": 100.0, "crank_length": 60.0, "coupler_length": 30.0, "rocker_length": 25.0}, "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0}}
+      ],
+      "expected": {"outcome": "no_pass", "attempts_used": 3, "final_candidate_id": "candidate_001"}
+    },
+    {
+      "id": "invalid_output_during_repair",
+      "category": "failure_path",
+      "description": "The repair attempt returns schema-invalid model output.",
+      "rationale": "Candidate 1 fails travel_distance; the repair response omits required fields. The run must fail explicitly with INVALID_MODEL_OUTPUT rather than silently retrying, crashing or passing.",
+      "brief": {
+        "target_motion": {"type": "near_horizontal", "travel_distance": 100.0, "trajectory_tolerance": 5.0},
+        "constraints": {"max_footprint": 200.0, "complete_motion_cycle": true, "avoid_collisions": true}
+      },
+      "candidate_sequence": [
+        {"parameters": {"ground_length": 75.0, "crank_length": 30.0, "coupler_length": 105.0, "rocker_length": 75.0}, "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0}},
+        {"mechanism_type": "four_bar_linkage"}
+      ],
+      "expected": {"outcome": "run_failed", "error_code": "INVALID_MODEL_OUTPUT"}
+    }
+  ]
+}

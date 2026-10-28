@@ -25,6 +25,8 @@ Working today:
 - Deterministic offline fallback for briefs and candidates when no key is configured
 - Bounded candidate loop with evaluator feedback fed into the next attempt
 - Independent evaluator and path metrics, tested without any LLM call
+- Reviewed benchmark suites with recorded results: evaluator classification
+  (pass/fail/boundary/invalid cases) and bounded repair (see `apps/api/benchmarks/`)
 - JSON evidence persistence per run: run, brief, candidates, simulations and evidence bundle
 - React + TypeScript + Vite UI with prompt form, live event log, validation report, candidate
   history and a rendered reference trace
@@ -34,7 +36,7 @@ Not wired yet:
 
 1. Physical link thickness, obstacle geometry and a broader collision model. The MVP checks
    zero-thickness moving links and treats the ground link as a fixed frame.
-2. The full PRD benchmark suite and a formal physical-feasibility review.
+2. A broader independently reviewed benchmark suite and a formal physical-feasibility review.
 
 A candidate that fails evaluation produces a completed run with `no_pass: true`, not a fake
 success. Infrastructure and model failures use `run_failed` with a safe error code.
@@ -165,7 +167,8 @@ npm run build
 Evaluator, kinematics, parser and API tests run without a live model or simulator. The Meta
 adapter tests use `httpx.MockTransport`; a live smoke test is intentionally opt-in. Compiler,
 MuJoCo runner and reference-comparison tests run when the `sim` extra is installed and skip
-otherwise.
+otherwise. The reviewed benchmark suites in `apps/api/benchmarks/` run as part of the suite;
+their recorded results and assumptions live in `apps/api/benchmarks/README.md`.
 
 ## Repository layout
 

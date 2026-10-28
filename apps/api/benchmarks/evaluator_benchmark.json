@@ -1,0 +1,186 @@
+{
+  "benchmark": "evaluator",
+  "version": "1.0",
+  "reviewed_on": "2026-10-29",
+  "notes": "Manually reviewed classification cases for the independent evaluator. Every expected outcome is justified by hand geometry or an explicitly bounded tolerance. The suite must contain passing, failing, boundary and invalid cases and must never encode a false pass.",
+  "cases": [
+    {
+      "id": "c1_demo_pass",
+      "category": "passing",
+      "description": "Reference crank-rocker against the demo brief.",
+      "rationale": "Grashof crank-rocker: s+l = 35+135 = 170 <= p+q = 95+100 = 195, so the crank rotates a full cycle. Measured travel 99.51 mm (error 0.49 <= 5), footprint 181.97 mm <= 200, trajectory error 4.14 mm <= 5, cycle closes, no moving-link collision.",
+      "brief": {
+        "target_motion": {"type": "near_horizontal", "travel_distance": 100.0, "trajectory_tolerance": 5.0},
+        "constraints": {"max_footprint": 200.0, "complete_motion_cycle": true, "avoid_collisions": true}
+      },
+      "parameters": {"ground_length": 95.0, "crank_length": 35.0, "coupler_length": 135.0, "rocker_length": 100.0},
+      "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0},
+      "expected": {"status": "passed", "failed_constraints": []}
+    },
+    {
+      "id": "c2_demo_pass_near_limit",
+      "category": "boundary",
+      "description": "Passing case whose trajectory error sits just inside the tolerance.",
+      "rationale": "Grashof crank-rocker (38+130 = 168 <= 100+95 = 195). Trajectory error 4.70 mm is only 0.30 mm inside the 5 mm tolerance and footprint 183.99 mm is near the 200 mm limit; travel 98.89 mm. Expected pass: thresholds are inclusive.",
+      "brief": {
+        "target_motion": {"type": "near_horizontal", "travel_distance": 100.0, "trajectory_tolerance": 5.0},
+        "constraints": {"max_footprint": 200.0, "complete_motion_cycle": true, "avoid_collisions": true}
+      },
+      "parameters": {"ground_length": 100.0, "crank_length": 38.0, "coupler_length": 130.0, "rocker_length": 95.0},
+      "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0},
+      "expected": {"status": "passed", "failed_constraints": []}
+    },
+    {
+      "id": "c3_demo_pass",
+      "category": "passing",
+      "description": "Second valid crank-rocker geometry.",
+      "rationale": "Grashof crank-rocker (35+130 = 165 <= 90+105 = 195). Travel 101.30 mm is within 100 +/- 5, footprint 170.00 mm <= 200, trajectory error 4.63 mm <= 5. Expected pass.",
+      "brief": {
+        "target_motion": {"type": "near_horizontal", "travel_distance": 100.0, "trajectory_tolerance": 5.0},
+        "constraints": {"max_footprint": 200.0, "complete_motion_cycle": true, "avoid_collisions": true}
+      },
+      "parameters": {"ground_length": 90.0, "crank_length": 35.0, "coupler_length": 130.0, "rocker_length": 105.0},
+      "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0},
+      "expected": {"status": "passed", "failed_constraints": []}
+    },
+    {
+      "id": "c4_demo_fail_travel",
+      "category": "failing",
+      "description": "Valid mechanism whose output stroke is too short for the brief.",
+      "rationale": "Grashof crank-rocker but the 75 mm rocker limits the stroke: travel 84.22 mm misses 100 mm by 15.78 mm > 5 mm tolerance. Footprint 151.50 mm, trajectory error 4.04 mm and the full cycle all pass. Expected fail on travel_distance only.",
+      "brief": {
+        "target_motion": {"type": "near_horizontal", "travel_distance": 100.0, "trajectory_tolerance": 5.0},
+        "constraints": {"max_footprint": 200.0, "complete_motion_cycle": true, "avoid_collisions": true}
+      },
+      "parameters": {"ground_length": 75.0, "crank_length": 30.0, "coupler_length": 105.0, "rocker_length": 75.0},
+      "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0},
+      "expected": {"status": "failed", "failed_constraints": ["travel_distance"]}
+    },
+    {
+      "id": "c4_target84_pass",
+      "category": "boundary",
+      "description": "Same geometry as c4_demo_fail_travel, evaluated against its achievable target.",
+      "rationale": "Travel 84.22 mm now matches the 84 mm target (error 0.22 <= 5); footprint 151.50 mm and trajectory error 4.04 mm pass. Expected pass. Paired with c4_demo_fail_travel to show classification follows the brief, not the geometry.",
+      "brief": {
+        "target_motion": {"type": "near_horizontal", "travel_distance": 84.0, "trajectory_tolerance": 5.0},
+        "constraints": {"max_footprint": 200.0, "complete_motion_cycle": true, "avoid_collisions": true}
+      },
+      "parameters": {"ground_length": 75.0, "crank_length": 30.0, "coupler_length": 105.0, "rocker_length": 75.0},
+      "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0},
+      "expected": {"status": "passed", "failed_constraints": []}
+    },
+    {
+      "id": "c4_target84_tight_tolerance",
+      "category": "boundary",
+      "description": "Same geometry again with a tightened tolerance.",
+      "rationale": "With tolerance 3 mm the travel error 0.22 mm still passes but the trajectory error 4.04 mm exceeds 3 mm. Expected fail on trajectory_tolerance only.",
+      "brief": {
+        "target_motion": {"type": "near_horizontal", "travel_distance": 84.0, "trajectory_tolerance": 3.0},
+        "constraints": {"max_footprint": 200.0, "complete_motion_cycle": true, "avoid_collisions": true}
+      },
+      "parameters": {"ground_length": 75.0, "crank_length": 30.0, "coupler_length": 105.0, "rocker_length": 75.0},
+      "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0},
+      "expected": {"status": "failed", "failed_constraints": ["trajectory_tolerance"]}
+    },
+    {
+      "id": "c1_tight_footprint",
+      "category": "failing",
+      "description": "Valid geometry against a footprint limit it cannot meet.",
+      "rationale": "c1 geometry measured at 181.97 mm footprint exceeds the 150 mm limit while travel 99.51 mm and trajectory error 4.14 mm pass. Expected fail on max_footprint only.",
+      "brief": {
+        "target_motion": {"type": "near_horizontal", "travel_distance": 100.0, "trajectory_tolerance": 5.0},
+        "constraints": {"max_footprint": 150.0, "complete_motion_cycle": true, "avoid_collisions": true}
+      },
+      "parameters": {"ground_length": 95.0, "crank_length": 35.0, "coupler_length": 135.0, "rocker_length": 100.0},
+      "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0},
+      "expected": {"status": "failed", "failed_constraints": ["max_footprint"]}
+    },
+    {
+      "id": "c1_tight_tolerance",
+      "category": "failing",
+      "description": "Valid geometry against a tolerance it cannot meet.",
+      "rationale": "c1 trajectory error 4.14 mm exceeds the tightened 3 mm tolerance while the travel error 0.49 mm still passes. Expected fail on trajectory_tolerance only.",
+      "brief": {
+        "target_motion": {"type": "near_horizontal", "travel_distance": 100.0, "trajectory_tolerance": 3.0},
+        "constraints": {"max_footprint": 200.0, "complete_motion_cycle": true, "avoid_collisions": true}
+      },
+      "parameters": {"ground_length": 95.0, "crank_length": 35.0, "coupler_length": 135.0, "rocker_length": 100.0},
+      "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0},
+      "expected": {"status": "failed", "failed_constraints": ["trajectory_tolerance"]}
+    },
+    {
+      "id": "c1_contradictory_brief",
+      "category": "failing",
+      "description": "Contradictory requirements: 500 mm of travel inside a 100 mm footprint.",
+      "rationale": "No linkage can satisfy both requirements. Measured travel 99.51 mm misses 500 mm and footprint 181.97 mm exceeds 100 mm. Expected fail on travel_distance and max_footprint; at run level this brief produces an honest no_pass after the repair budget.",
+      "brief": {
+        "target_motion": {"type": "near_horizontal", "travel_distance": 500.0, "trajectory_tolerance": 5.0},
+        "constraints": {"max_footprint": 100.0, "complete_motion_cycle": true, "avoid_collisions": true}
+      },
+      "parameters": {"ground_length": 95.0, "crank_length": 35.0, "coupler_length": 135.0, "rocker_length": 100.0},
+      "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0},
+      "expected": {"status": "failed", "failed_constraints": ["travel_distance", "max_footprint"]}
+    },
+    {
+      "id": "c7_partial_cycle",
+      "category": "failing",
+      "description": "Valid geometry over an input range that never closes a cycle.",
+      "rationale": "The 0 -> 180 degree sweep does not cover a full cycle: cycle_completed is false and the partial arc only reaches 85.80 mm of travel. Expected fail on travel_distance and complete_motion_cycle.",
+      "brief": {
+        "target_motion": {"type": "near_horizontal", "travel_distance": 100.0, "trajectory_tolerance": 5.0},
+        "constraints": {"max_footprint": 200.0, "complete_motion_cycle": true, "avoid_collisions": true}
+      },
+      "parameters": {"ground_length": 95.0, "crank_length": 35.0, "coupler_length": 135.0, "rocker_length": 100.0},
+      "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 180.0},
+      "expected": {"status": "failed", "failed_constraints": ["travel_distance", "complete_motion_cycle"]}
+    },
+    {
+      "id": "c8_moving_link_collision",
+      "category": "failing",
+      "description": "Geometry whose crank sweeps through its rocker.",
+      "rationale": "Ground 50, crank 150, coupler 160, rocker 160: the long crank sweeps through the rocker and the deterministic crank-vs-rocker segment check fires. The case is also far outside the demo targets (travel 320.00 mm, footprint 359.99 mm, trajectory error 97.00 mm). Expected fail including avoid_collisions.",
+      "brief": {
+        "target_motion": {"type": "near_horizontal", "travel_distance": 100.0, "trajectory_tolerance": 5.0},
+        "constraints": {"max_footprint": 200.0, "complete_motion_cycle": true, "avoid_collisions": true}
+      },
+      "parameters": {"ground_length": 50.0, "crank_length": 150.0, "coupler_length": 160.0, "rocker_length": 160.0},
+      "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0},
+      "expected": {
+        "status": "failed",
+        "failed_constraints": ["travel_distance", "trajectory_tolerance", "max_footprint", "avoid_collisions"]
+      }
+    },
+    {
+      "id": "c5_unclosable_mid_cycle",
+      "category": "invalid",
+      "description": "Assembles at the start angle but cannot close over the full rotation.",
+      "rationale": "Parameters (100, 60, 30, 25) assemble at 0 degrees but the loop cannot close across the cycle (closure error exceeds the 0.05 mm limit in MuJoCo; the reference solver reports the failing angle). Simulation integrity fails and metrics fall back to zeros. Expected fail including simulation_integrity.",
+      "brief": {
+        "target_motion": {"type": "near_horizontal", "travel_distance": 100.0, "trajectory_tolerance": 5.0},
+        "constraints": {"max_footprint": 200.0, "complete_motion_cycle": true, "avoid_collisions": true}
+      },
+      "parameters": {"ground_length": 100.0, "crank_length": 60.0, "coupler_length": 30.0, "rocker_length": 25.0},
+      "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0},
+      "expected": {
+        "status": "failed",
+        "failed_constraints": ["travel_distance", "complete_motion_cycle", "avoid_collisions", "simulation_integrity"]
+      }
+    },
+    {
+      "id": "c6_unclosable_at_start",
+      "category": "invalid",
+      "description": "Cannot even assemble at the start angle.",
+      "rationale": "Parameters (1000, 10, 10, 10): the crank pin sits 990 mm from O4 while coupler+rocker reach only 20 mm, so no assembly exists at any input angle. The compiler rejects the candidate and the simulation reports a structured failure. Expected fail including simulation_integrity.",
+      "brief": {
+        "target_motion": {"type": "near_horizontal", "travel_distance": 100.0, "trajectory_tolerance": 5.0},
+        "constraints": {"max_footprint": 200.0, "complete_motion_cycle": true, "avoid_collisions": true}
+      },
+      "parameters": {"ground_length": 1000.0, "crank_length": 10.0, "coupler_length": 10.0, "rocker_length": 10.0},
+      "input_motion": {"start_angle_deg": 0.0, "end_angle_deg": 360.0},
+      "expected": {
+        "status": "failed",
+        "failed_constraints": ["travel_distance", "complete_motion_cycle", "avoid_collisions", "simulation_integrity"]
+      }
+    }
+  ]
+}
