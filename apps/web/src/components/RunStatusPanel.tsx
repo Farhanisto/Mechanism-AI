@@ -21,6 +21,10 @@ function describeEvent(event: RunEvent): string {
     .map((field) => event.data[field])
     .filter((value): value is string | number => value !== undefined && value !== null)
     .map(String);
+  const questions = event.data["questions"];
+  if (Array.isArray(questions)) {
+    parts.push(`${questions.length} question(s) waiting for answers`);
+  }
   return parts.join(" · ");
 }
 

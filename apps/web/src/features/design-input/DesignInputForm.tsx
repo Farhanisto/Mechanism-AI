@@ -11,7 +11,7 @@ interface DesignInputFormProps {
 }
 
 export function DesignInputForm({ onSubmit, disabled }: DesignInputFormProps) {
-  const [prompt, setPrompt] = useState(EXAMPLE_PROMPT);
+  const [prompt, setPrompt] = useState("");
   const [maxCandidates, setMaxCandidates] = useState(3);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -35,6 +35,7 @@ export function DesignInputForm({ onSubmit, disabled }: DesignInputFormProps) {
           id="prompt"
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
+          placeholder={EXAMPLE_PROMPT}
           rows={6}
           maxLength={4000}
           disabled={disabled}

@@ -63,12 +63,18 @@ export function useDesignRun(): DesignRunState {
     };
   }, []);
 
+  const refreshSeqRef = useRef(0);
+
   const refresh = useCallback(async (runId: string) => {
+    const seq = ++refreshSeqRef.current;
     try {
       const [latestRun, latestCandidates] = await Promise.all([
         getDesignRun(runId),
         listCandidates(runId),
       ]);
+      if (seq !== refreshSeqRef.current) {
+        return;
+      }
       setRun(latestRun);
       setCandidates(latestCandidates);
 
@@ -81,6 +87,9 @@ export function useDesignRun(): DesignRunState {
             ).catch(() => null)
           : Promise.resolve(null),
       ]);
+      if (seq !== refreshSeqRef.current) {
+        return;
+      }
       setBriefArtifact(latestBrief);
       setSimulation(latestSimulation);
     } catch (cause) {
