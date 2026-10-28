@@ -34,6 +34,10 @@ BRIEF_PAYLOAD: dict[str, Any] = {
         "avoid_collisions": True,
     },
     "assumptions": [],
+    "unknowns": [],
+    "clarification_questions": [],
+    "requirement_sources": [],
+    "requested_checks": [],
 }
 
 
@@ -360,7 +364,13 @@ BLOCKING_BRIEF_PAYLOAD: dict[str, Any] = {
         }
     ],
     "unknowns": ["target_motion.travel_distance"],
-    "requirement_sources": {"target_motion.travel_distance": "default_assumption"},
+    "requirement_sources": [
+        {
+            "field": "target_motion.travel_distance",
+            "source": "default_assumption",
+        }
+    ],
+    "requested_checks": [],
 }
 
 
@@ -490,7 +500,7 @@ async def test_unsupported_prompt_completes_without_candidates(tmp_path: Path) -
 async def test_unresolved_required_check_blocks_a_pass(tmp_path: Path) -> None:
     payload = {
         **BRIEF_PAYLOAD,
-        "evaluator_config": {"fatigue_cycles": 1_000_000},
+        "requested_checks": ["fatigue_cycles"],
     }
     client = ScriptedMetaClient(
         candidate_payloads=[candidate_payload(95, 35, 135, 100)], brief_payload=payload

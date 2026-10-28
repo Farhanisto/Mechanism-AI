@@ -29,6 +29,10 @@ BRIEF_PAYLOAD: dict[str, Any] = {
         "avoid_collisions": True,
     },
     "assumptions": ["The output moves approximately horizontally."],
+    "unknowns": [],
+    "clarification_questions": [],
+    "requirement_sources": [],
+    "requested_checks": [],
 }
 
 CANDIDATE_PAYLOAD: dict[str, Any] = {
@@ -84,9 +88,15 @@ async def test_requirements_parser_validates_and_adds_standard_assumptions() -> 
     assert call["schema_name"] == "normalized_brief"
     assert call["schema"]["additionalProperties"] is False
     assert set(call["schema"]["required"]) == {
+        "mechanism_type",
+        "units",
         "target_motion",
         "constraints",
         "assumptions",
+        "unknowns",
+        "clarification_questions",
+        "requirement_sources",
+        "requested_checks",
     }
     assert "TargetMotionProposal" in call["schema"]["$defs"]
 
@@ -223,7 +233,9 @@ async def test_parse_requirements_merges_policy_questions_with_model_questions()
             }
         ],
         "unknowns": ["material"],
-        "requirement_sources": {"target_motion.travel_distance": "user_provided"},
+        "requirement_sources": [
+            {"field": "target_motion.travel_distance", "source": "user_provided"}
+        ],
     }
     client = FakeMetaClient(payload)
 

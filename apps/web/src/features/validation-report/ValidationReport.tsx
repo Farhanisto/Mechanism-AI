@@ -41,13 +41,23 @@ export function ValidationReport({
       ) : null}
 
       {run?.no_pass ? (
-        <div className="notice notice-warning">
-          <strong>No passing candidate</strong>
-          <span>
-            The best attempt is shown below. Failing the evaluator is a valid outcome; it is
-            not reported as a successful design.
-          </span>
-        </div>
+        candidates.length === 0 ? (
+          <div className="notice notice-error">
+            <strong>Request not supported</strong>
+            <span>
+              No registered capability can handle this request, so nothing was generated or
+              evaluated. The capability assessment below names what is missing.
+            </span>
+          </div>
+        ) : (
+          <div className="notice notice-warning">
+            <strong>No passing candidate</strong>
+            <span>
+              The best attempt is shown below. Failing the evaluator is a valid outcome; it is
+              not reported as a successful design.
+            </span>
+          </div>
+        )
       ) : null}
 
       {briefArtifact ? (

@@ -83,6 +83,20 @@ class _ScriptedClient:
         return None
 
 
+def _brief_payload(case: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mechanism_type": "four_bar_linkage",
+        "units": "mm",
+        "target_motion": case["brief"]["target_motion"],
+        "constraints": case["brief"]["constraints"],
+        "assumptions": [],
+        "unknowns": [],
+        "clarification_questions": [],
+        "requirement_sources": [],
+        "requested_checks": [],
+    }
+
+
 def _sequence_payloads(case: dict[str, Any]) -> list[dict[str, Any]]:
     payloads = []
     for item in case["candidate_sequence"]:
@@ -125,11 +139,7 @@ async def test_repair_benchmark(case: dict[str, Any], tmp_path: Path) -> None:
         events=EventBroker(),
         artifacts=artifacts,
         meta_client=_ScriptedClient(
-            brief_payload={
-                "target_motion": case["brief"]["target_motion"],
-                "constraints": case["brief"]["constraints"],
-                "assumptions": [],
-            },
+            brief_payload=_brief_payload(case),
             candidate_payloads=_sequence_payloads(case),
         ),
     )
@@ -167,11 +177,7 @@ async def test_repair_benchmark_success_rate(tmp_path: Path) -> None:
             events=EventBroker(),
             artifacts=artifacts,
             meta_client=_ScriptedClient(
-                brief_payload={
-                    "target_motion": case["brief"]["target_motion"],
-                    "constraints": case["brief"]["constraints"],
-                    "assumptions": [],
-                },
+                brief_payload=_brief_payload(case),
                 candidate_payloads=_sequence_payloads(case),
             ),
         )

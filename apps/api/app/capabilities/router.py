@@ -69,7 +69,7 @@ def route_request(
         else:
             unavailable_checks.append(check)
 
-    for key in brief.evaluator_config:
+    for key in [*brief.requested_checks, *brief.evaluator_config]:
         if key not in entry.evaluation_checks:
             unavailable_checks.append(key)
 

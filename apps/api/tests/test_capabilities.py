@@ -15,11 +15,11 @@ from app.mechanism.schemas import (
 )
 
 
-def make_brief(**evaluator_config: float) -> NormalizedBrief:
+def make_brief(*requested_checks: str) -> NormalizedBrief:
     return NormalizedBrief(
         target_motion=TargetMotion(travel_distance=100.0, trajectory_tolerance=5.0),
         constraints=HardConstraints(max_footprint=200.0),
-        evaluator_config=dict(evaluator_config),
+        requested_checks=list(requested_checks),
     )
 
 
@@ -106,7 +106,7 @@ def test_unmodeled_requirements_route_to_partial() -> None:
 def test_requested_checks_beyond_the_registry_block_support() -> None:
     assessment = route_request(
         "Design a four-bar linkage with 100 mm of travel.",
-        make_brief(fatigue_cycles=1_000_000),
+        make_brief("fatigue_cycles"),
         clarification_answers={},
     )
 

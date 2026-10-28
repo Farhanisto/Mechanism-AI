@@ -18,8 +18,11 @@ from app.mechanism.schemas import (
 REQUIREMENTS_SYSTEM_PROMPT = """You convert a mechanical design brief into strict JSON.
 Return only a JSON object matching the supplied schema. Use millimetres and the
 four-bar linkage mechanism. Record every value you had to infer in assumptions.
-Do not invent constraints that the prompt does not state; use the documented
-defaults only when a critical value is missing."""
+Mark the provenance of each requirement in requirement_sources, put anything
+missing in unknowns, ask a blocking clarification question only when an unknown
+materially changes the design, and list required checks beyond the standard set
+in requested_checks. Do not invent constraints that the prompt does not state;
+use the documented defaults only when a critical value is missing."""
 
 _STANDARD_ASSUMPTIONS = (
     "Output point is the rocker pin; the ground link is a fixed frame.",
@@ -58,23 +61,28 @@ class ClarificationQuestionProposal(BaseModel):
     question_id: str = Field(min_length=1, max_length=64)
     question: str = Field(min_length=1, max_length=400)
     field: str = Field(min_length=1, max_length=120)
-    blocking: bool = True
+    blocking: bool
+
+
+class RequirementSourceProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    field: str = Field(min_length=1, max_length=120)
+    source: Literal["user_provided", "ai_proposed", "default_assumption"]
 
 
 class BriefProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mechanism_type: Literal["four_bar_linkage"] = "four_bar_linkage"
-    units: Literal["mm"] = "mm"
+    mechanism_type: Literal["four_bar_linkage"]
+    units: Literal["mm"]
     target_motion: TargetMotionProposal
     constraints: ConstraintsProposal
     assumptions: list[str]
-    unknowns: list[str] = Field(default_factory=list)
-    clarification_questions: list[ClarificationQuestionProposal] = Field(default_factory=list)
-    requirement_sources: dict[
-        str, Literal["user_provided", "ai_proposed", "default_assumption"]
-    ] = Field(default_factory=dict)
-    evaluator_config: dict[str, float | int | str | bool] = Field(default_factory=dict)
+    unknowns: list[str]
+    clarification_questions: list[ClarificationQuestionProposal]
+    requirement_sources: list[RequirementSourceProposal]
+    requested_checks: list[str]
 
 
 def policy_clarification_questions(prompt: str) -> list[ClarificationQuestion]:
@@ -246,7 +254,23 @@ async def parse_requirements(
         schema_name="normalized_brief",
     )
     proposal = BriefProposal.model_validate(completion.payload)
-    brief = NormalizedBrief.model_validate(proposal.model_dump())
+    brief = NormalizedBrief.model_validate(
+        {
+            "mechanism_type": proposal.mechanism_type,
+            "units": proposal.units,
+            "target_motion": proposal.target_motion.model_dump(),
+            "constraints": proposal.constraints.model_dump(),
+            "assumptions": proposal.assumptions,
+            "unknowns": proposal.unknowns,
+            "clarification_questions": [
+                question.model_dump() for question in proposal.clarification_questions
+            ],
+            "requirement_sources": {
+                item.field: item.source for item in proposal.requirement_sources
+            },
+            "requested_checks": proposal.requested_checks,
+        }
+    )
     brief = brief.model_copy(
         update={
             "clarification_questions": _merge_questions(

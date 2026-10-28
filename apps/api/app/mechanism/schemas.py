@@ -75,6 +75,7 @@ class NormalizedBrief(BaseModel):
     assumptions: list[str] = Field(default_factory=list)
     evaluator_config: dict[str, float | int | str | bool] = Field(default_factory=dict)
     unknowns: list[str] = Field(default_factory=list)
+    requested_checks: list[str] = Field(default_factory=list)
     clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
     requirement_sources: dict[str, RequirementSource] = Field(default_factory=dict)
     capability_assessment: CapabilityAssessment | None = None
