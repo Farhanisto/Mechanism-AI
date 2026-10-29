@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.cad.compiler import MeshStats, mesh_stats
-from app.mechanism.schemas import DesignProgram
+from app.mechanism.schemas import DesignProgram, ProgramJoint
 
 SANDBOX_VERSION = "0.1.0"
 DEFAULT_TIMEOUT_SECONDS = 15
@@ -60,6 +60,14 @@ class ProgramRejectedError(ValueError):
 
 
 @dataclass(frozen=True)
+class ProgramPartExecution:
+    name: str
+    stl: bytes
+    sha256: str
+    stats: MeshStats
+
+
+@dataclass(frozen=True)
 class ProgramExecution:
     status: str
     stl: bytes | None
@@ -68,6 +76,20 @@ class ProgramExecution:
     error: str | None
     stdout: str
     stats: MeshStats | None
+    parts: tuple[ProgramPartExecution, ...] = ()
+    joints: tuple[ProgramJoint, ...] = ()
+
+
+def _failure(duration_ms: float, stdout: str, message: str) -> ProgramExecution:
+    return ProgramExecution(
+        status="failed",
+        stl=None,
+        sha256=None,
+        duration_ms=duration_ms,
+        error=message,
+        stdout=stdout,
+        stats=None,
+    )
 
 
 def static_check(program: DesignProgram) -> None:
@@ -191,6 +213,55 @@ def run_design_program(
                 stdout=stdout,
                 stats=None,
             )
+
+        raw_parts = result.get("parts") or []
+        if not isinstance(raw_parts, list) or len(raw_parts) > 12:
+            return _failure(duration_ms, stdout, "the manifest lists an invalid part set")
+        parts: list[ProgramPartExecution] = []
+        names: set[str] = set()
+        for item in raw_parts:
+            name = item.get("name") if isinstance(item, dict) else None
+            if not isinstance(name, str) or name in names:
+                return _failure(duration_ms, stdout, "the manifest lists invalid part names")
+            names.add(name)
+            part_path = Path(workspace) / f"part_{name}.stl"
+            if not part_path.is_file():
+                return _failure(duration_ms, stdout, f"part {name!r} was not exported")
+            part_data = part_path.read_bytes()
+            try:
+                part_stats = mesh_stats(part_data)
+            except ValueError as exc:
+                return _failure(
+                    duration_ms, stdout, f"part {name!r} mesh is invalid: {exc}"
+                )
+            parts.append(
+                ProgramPartExecution(
+                    name=name,
+                    stl=part_data,
+                    sha256=str(item.get("sha256") or ""),
+                    stats=part_stats,
+                )
+            )
+        if not parts:
+            return _failure(duration_ms, stdout, "the program exported no parts")
+
+        raw_joints = result.get("joints") or []
+        if not isinstance(raw_joints, list) or len(raw_joints) > 6:
+            return _failure(duration_ms, stdout, "the manifest lists an invalid joint set")
+        joints: list[ProgramJoint] = []
+        try:
+            for item in raw_joints:
+                joint = ProgramJoint.model_validate(item)
+                if joint.parent not in names or joint.child not in names:
+                    raise ValueError("joint references a part that was not produced")
+                if joint.parent == joint.child:
+                    raise ValueError("joint must connect two different parts")
+                if joint.min_deg > joint.max_deg:
+                    raise ValueError("joint limits are inverted")
+                joints.append(joint)
+        except ValueError as exc:
+            return _failure(duration_ms, stdout, f"invalid joint declaration: {exc}")
+
         return ProgramExecution(
             status="executed",
             stl=data,
@@ -199,11 +270,14 @@ def run_design_program(
             error=None,
             stdout=stdout,
             stats=stats,
+            parts=tuple(parts),
+            joints=tuple(joints),
         )
 
 
 __all__ = [
     "ANGULAR_TOLERANCE_RAD",
+    "ProgramPartExecution",
     "DEFAULT_MAX_BYTES",
     "DEFAULT_MEMORY_BYTES",
     "DEFAULT_TIMEOUT_SECONDS",

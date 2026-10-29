@@ -35,6 +35,21 @@ question only when missing information would materially change the part. Do not 
 requirements the request does not state."""
 
 
+ASSEMBLY_SYSTEM_PROMPT = """You convert a mechanical design request into strict JSON for a
+small mechanical assembly of static solids connected by revolute joints (for example a hinge
+with leaves, knuckles and a pin, or a clevis bracket). Use millimetres and give the bounding
+envelope of the assembled state.
+
+Set supported=false with a short reason only when no meaningful assembly can represent part of
+the request. When the request is larger than a single assembly, name exactly what is produced in
+description and list every omitted component, mechanism and analysis in
+unsupported_requirements.
+
+Record inferred values in assumptions, mark provenance, and ask a blocking clarification question
+only when missing information would materially change the assembly. Do not invent requirements
+the request does not state."""
+
+
 class PartBriefProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -62,9 +77,10 @@ async def parse_part_requirements(
     prompt: str,
     *,
     client: MetaModelClient,
+    assembly: bool = False,
 ) -> PartRequirementsResult:
     completion = await client.complete_json(
-        system_prompt=PART_SYSTEM_PROMPT,
+        system_prompt=ASSEMBLY_SYSTEM_PROMPT if assembly else PART_SYSTEM_PROMPT,
         user_prompt=prompt,
         schema=PartBriefProposal.model_json_schema(),
         schema_name="part_brief",
@@ -85,7 +101,9 @@ async def parse_part_requirements(
         )
         for item in proposal.clarification_questions
     ]
-    questions = _merge_questions(questions, policy_clarification_questions(prompt))
+    questions = _merge_questions(
+        questions, policy_clarification_questions(prompt, include_motion=False)
+    )
     brief = PartBrief(
         part=PartRequirements(
             description=proposal.description,
@@ -105,6 +123,7 @@ async def parse_part_requirements(
 
 
 __all__ = [
+    "ASSEMBLY_SYSTEM_PROMPT",
     "PART_SYSTEM_PROMPT",
     "PartBriefProposal",
     "PartRequirementsResult",

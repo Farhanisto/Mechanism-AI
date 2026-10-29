@@ -3,12 +3,14 @@ import type { BriefArtifact, PartBriefArtifact } from "../../lib/api";
 interface RequirementsPanelProps {
   briefArtifact: BriefArtifact | null;
   partBrief: PartBriefArtifact | null;
+  capabilityId?: string | null;
   expert: boolean;
 }
 
 export function RequirementsPanel({
   briefArtifact,
   partBrief,
+  capabilityId,
   expert,
 }: RequirementsPanelProps) {
   const assessment = briefArtifact?.brief.capability_assessment ?? null;
@@ -69,7 +71,9 @@ export function RequirementsPanel({
           ) : null}
           <div className="capability-panel">
             <p>
-              <strong>Capability: custom_part 0.1.0</strong>
+              <strong>
+                Capability: {capabilityId ?? "custom_part"} 0.1.0
+              </strong>
               <span className="pill pill-capability-supported">model-authored</span>
             </p>
           </div>

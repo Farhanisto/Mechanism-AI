@@ -82,7 +82,9 @@ class BriefProposal(BaseModel):
     requested_checks: list[str]
 
 
-def policy_clarification_questions(prompt: str) -> list[ClarificationQuestion]:
+def policy_clarification_questions(
+    prompt: str, *, include_motion: bool = True
+) -> list[ClarificationQuestion]:
     """Deterministic honesty floor: ask about anything the evaluator cannot verify.
 
     These questions are asked in addition to any the model proposes; they pause
@@ -104,7 +106,7 @@ def policy_clarification_questions(prompt: str) -> list[ClarificationQuestion]:
                 blocking=True,
             )
         )
-    if _UNMODELED_MOTION_PATTERN.search(prompt):
+    if include_motion and _UNMODELED_MOTION_PATTERN.search(prompt):
         questions.append(
             ClarificationQuestion(
                 question_id="target_motion_type",

@@ -31,6 +31,12 @@ export function ProgramsPanel({ runId, programs, expert }: ProgramsPanelProps) {
                 <span className="mode-note">
                   attempt {record.attempt_number} · {record.execution_status}
                   {record.duration_ms != null ? ` · ${Math.round(record.duration_ms)} ms` : ""}
+                  {record.parts && record.parts.length > 0
+                    ? ` · ${record.parts.length} part${record.parts.length === 1 ? "" : "s"}`
+                    : ""}
+                  {record.joints && record.joints.length > 0
+                    ? ` · ${record.joints.length} joint${record.joints.length === 1 ? "" : "s"}`
+                    : ""}
                 </span>
               </header>
               {record.evaluation ? (
@@ -63,6 +69,26 @@ export function ProgramsPanel({ runId, programs, expert }: ProgramsPanelProps) {
                     </li>
                   ))}
                 </ul>
+              ) : null}
+              {record.parts && record.parts.length > 0 ? (
+                <ul className="chip-list">
+                  {record.parts.map((part) => (
+                    <li key={part.name} className="chip">
+                      {part.name}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {record.joints && record.joints.length > 0 ? (
+                <p className="version-note">
+                  Joints:{" "}
+                  {record.joints
+                    .map(
+                      (joint) =>
+                        `${joint.name} (${joint.parent} ↔ ${joint.child}, ${joint.min_deg}°…${joint.max_deg}°)`,
+                    )
+                    .join(" · ")}
+                </p>
               ) : null}
               {record.error ? <p className="version-note">Error: {record.error}</p> : null}
               {record.evaluation && record.evaluation.diagnostic_notes.length > 0 ? (

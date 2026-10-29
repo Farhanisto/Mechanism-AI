@@ -96,6 +96,7 @@ export function App() {
           <RequirementsPanel
             briefArtifact={briefArtifact}
             partBrief={partBrief}
+            capabilityId={run?.capability_id ?? null}
             expert={expert}
           />
         </div>

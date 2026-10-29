@@ -37,6 +37,7 @@ export interface DesignRun {
   final_candidate_id: string | null;
   max_candidates: number;
   no_pass: boolean;
+  capability_id?: string | null;
   pending_clarifications: ClarificationQuestion[];
   clarification_answers: Record<string, string>;
 }
@@ -175,6 +176,8 @@ export interface PartMetrics {
   deterministic: boolean;
   mesh_valid: boolean;
   program_status: string;
+  part_count?: number;
+  joint_count?: number;
 }
 
 export interface PartEvaluation {
@@ -204,7 +207,30 @@ export interface ProgramRecord {
   execution_status: string;
   duration_ms: number | null;
   error: string | null;
+  parts?: ProgramPart[];
+  joints?: ProgramJoint[];
   evaluation: PartEvaluation | null;
+}
+
+export interface ProgramPart {
+  name: string;
+  artifact_id: string;
+  artifact_hash: string | null;
+  triangle_count: number;
+  width_mm: number;
+  height_mm: number;
+  thickness_mm: number;
+  volume_mm3: number;
+}
+
+export interface ProgramJoint {
+  name: string;
+  parent: string;
+  child: string;
+  origin: [number, number, number];
+  axis: [number, number, number];
+  min_deg: number;
+  max_deg: number;
 }
 
 export interface BriefArtifact {

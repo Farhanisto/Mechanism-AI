@@ -435,6 +435,8 @@ class PartMetrics(BaseModel):
     deterministic: bool
     mesh_valid: bool
     program_status: str
+    part_count: int = Field(default=1, ge=0)
+    joint_count: int = Field(default=0, ge=0)
 
 
 class PartEvaluation(BaseModel):
@@ -448,6 +450,31 @@ class PartEvaluation(BaseModel):
     diagnostic_notes: list[str] = Field(default_factory=list)
 
 
+class ProgramPart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    artifact_id: str
+    artifact_hash: str | None = None
+    triangle_count: int = Field(ge=0)
+    width_mm: float = Field(ge=0)
+    height_mm: float = Field(ge=0)
+    thickness_mm: float = Field(ge=0)
+    volume_mm3: float = Field(ge=0)
+
+
+class ProgramJoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=32)
+    parent: str = Field(min_length=1, max_length=32)
+    child: str = Field(min_length=1, max_length=32)
+    origin: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    axis: tuple[float, float, float] = (0.0, 0.0, 1.0)
+    min_deg: float = Field(default=-180.0, ge=-360.0, le=360.0)
+    max_deg: float = Field(default=180.0, ge=-360.0, le=360.0)
+
+
 class ProgramRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -459,6 +486,8 @@ class ProgramRecord(BaseModel):
     execution_status: str
     duration_ms: float | None = None
     error: str | None = None
+    parts: list[ProgramPart] = Field(default_factory=list)
+    joints: list[ProgramJoint] = Field(default_factory=list)
     evaluation: PartEvaluation | None = None
 
 

@@ -32,6 +32,37 @@ Declare the parameters you used and the bounding box you expect. Do not claim an
 passed; an independent evaluator measures the exported mesh."""
 
 
+ASSEMBLY_PROGRAM_SYSTEM_PROMPT = """You write deterministic parametric CAD assemblies with
+CadQuery. Return strict JSON matching the schema. The source field must contain Python that
+defines build() returning a dict:
+
+    {
+      "parts": {"<part_name>": <cadquery Workplane|Shape|Compound>, ...},
+      "joints": [
+        {"name": "<joint_name>", "parent": "<part>", "child": "<part>",
+         "origin": [x, y, z], "axis": [x, y, z], "min_deg": -90, "max_deg": 90}
+      ]
+    }
+
+Rules:
+- Import only cadquery (optionally math). No other imports.
+- Deterministic geometry: no randomness, time, environment, network or filesystem access.
+- No dunder access, eval, exec, compile, open, os, sys, subprocess, pathlib or importlib.
+- 2 to 12 parts, at most 6 revolute joints, part names matching [A-Za-z0-9_].
+- Model the assembly in its assembled pose, inside the requested bounding envelope.
+- Every part must be a closed, non-empty solid in millimetres.
+- The two parts joined by each joint must not interpenetrate at any angle within its limits;
+  an independent check rotates the child part about the declared axis and detects penetrations
+  deeper than 0.2 mm.
+- For hinges, offset the leaf planes away from the joint axis so the rotating leaf cannot sweep
+  through the other leaf (for example shift each plate by at least its thickness plus 1 mm, or
+  start the plates beyond the knuckle radius). Interleave knuckles along the pin with axial gaps,
+  and keep the assembled state inside the requested envelope.
+- Keep loops bounded and primitives simple (box, cylinder, extrude, cut, union).
+
+Do not claim any checks passed; an independent evaluator measures the exported parts."""
+
+
 class DeclaredParameterProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -85,19 +116,28 @@ async def generate_program(
     attempt_number: int,
     max_attempts: int,
     previous_feedback: str | None = None,
+    assembly: bool = False,
 ) -> tuple[DesignProgram, ModelCompletion]:
-    completion = await client.complete_json(
-        system_prompt=PROGRAM_SYSTEM_PROMPT,
-        user_prompt=build_program_user_prompt(
+    request = {
+        "system_prompt": (
+            ASSEMBLY_PROGRAM_SYSTEM_PROMPT if assembly else PROGRAM_SYSTEM_PROMPT
+        ),
+        "user_prompt": build_program_user_prompt(
             brief,
             attempt_number=attempt_number,
             max_attempts=max_attempts,
             previous_feedback=previous_feedback,
         ),
-        schema=ProgramProposal.model_json_schema(),
-        schema_name="design_program",
-    )
-    proposal = ProgramProposal.model_validate(completion.payload)
+        "schema": ProgramProposal.model_json_schema(),
+        "schema_name": "design_program",
+    }
+    completion = await client.complete_json(**request)
+    try:
+        proposal = ProgramProposal.model_validate(completion.payload)
+    except Exception:
+        # One bounded retry for malformed or truncated structured output.
+        completion = await client.complete_json(**request)
+        proposal = ProgramProposal.model_validate(completion.payload)
     program = DesignProgram(
         program_id=f"program_{attempt_number:03d}",
         capability_id="custom_part",
@@ -117,6 +157,7 @@ async def generate_program(
 
 
 __all__ = [
+    "ASSEMBLY_PROGRAM_SYSTEM_PROMPT",
     "PROGRAM_SYSTEM_PROMPT",
     "ProgramProposal",
     "build_program_user_prompt",

@@ -35,9 +35,9 @@ Working today:
   with SHA-256 artifact hashes, timestamps and SQLite metadata for reconstruction
 - Parametric CAD: deterministic CadQuery/OpenCascade link-set compiler producing validated STL
   geometry artifacts with SHA-256 hashes (optional `cad` extra)
-- Model-authored design programs: the Meta model composes a `custom_part` design as CadQuery
-  code, a sandbox executes it, and an independent evaluator verifies the exported mesh - the
-  first capability that goes beyond the hand-coded four-bar path
+- Model-authored design programs: the Meta model composes `custom_part` solids and multi-part
+  `assembly` designs (named parts + revolute joints) as CadQuery code, a sandbox executes them,
+  and an independent evaluator verifies the exported meshes and articulation
 - Three-panel React + TypeScript + Vite workspace with an interactive Three.js CAD viewport (from the
   persisted STL artifact), motion preview from computed traces, an explicit concept/unavailable
   mode, Beginner/Expert views, validation report, candidate history and artifact downloads
@@ -196,11 +196,18 @@ tools execute it, and the evaluator verifies the result.**
    This is a **best-effort sandbox, not a hardened OS boundary**: model code never runs in the API
    process, but production deployments should also run the API in a container without network
    access or credentials.
-5. **Independent evaluation.** Fixed checks in `app/evaluation/part_evaluator.py` judge the exported
-   mesh, not the program: program executed, mesh valid (closed volume), measured width/height/
-   thickness within the requested envelope, deterministic (two runs produce the same mesh hash) and
-   export size within budget. Thresholds live in code; model output cannot change them.
-6. **Bounded repair.** Failed checks and execution errors feed back into the next program attempt
+5. **Assemblies.** For the `assembly` capability `build()` returns named parts plus revolute joint
+   declarations (`parent`, `child`, `origin`, `axis`, `min_deg`, `max_deg`). Each part is exported
+   separately and as a combined mesh; the evaluator additionally requires at least two parts, at
+   least one valid joint, and **articulation clearance**: the child part is rotated through the
+   declared range and must not interpenetrate the parent (penetration deeper than 0.2 mm fails).
+   Only the declared jointed pair is checked; pins, bores and hardware clearances are not verified.
+6. **Independent evaluation.** Fixed checks in `app/evaluation/part_evaluator.py` judge the exported
+   meshes, not the program: program executed, meshes valid (closed volume), measured width/height/
+   thickness within the requested envelope, deterministic (two runs produce the same mesh hashes),
+   export size within budget, and for assemblies the parts/joints/articulation checks above.
+   Thresholds live in code; model output cannot change them.
+7. **Bounded repair.** Failed checks and execution errors feed back into the next program attempt
    (up to three). Exhausted budgets end as an honest `no_pass` with the failed checks named; the
    best attempt is reported.
 

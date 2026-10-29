@@ -101,8 +101,6 @@ FOUR_BAR_CAPABILITY = CapabilityEntry(
         "rocker",
         "coupler",
         "mechanism",
-        "hinge",
-        "joint",
     ),
 )
 
@@ -158,14 +156,71 @@ CUSTOM_PART_CAPABILITY = CapabilityEntry(
 )
 
 
+ASSEMBLY_CAPABILITY = CapabilityEntry(
+    capability_id="assembly",
+    version="0.1.0",
+    domain="small mechanical assembly of static solids with revolute joints inside an envelope",
+    input_schema="PartBrief",
+    output_schema="DesignProgram (assembly) + per-part GeometryArtifact (stl)",
+    units="mm",
+    parameter_constraints={
+        "parts": "2 to 12",
+        "joints": "at most 6 revolute joints",
+        "envelope": "positive dimensions, at most 10000 mm",
+    },
+    evaluation_checks=(
+        "program_executed",
+        "mesh_valid",
+        "parts_present",
+        "joints_valid",
+        "articulation_clearance",
+        "envelope_width",
+        "envelope_height",
+        "envelope_thickness",
+        "determinism",
+        "size_within_budget",
+    ),
+    known_limitations=(
+        "Design programs run in a best-effort sandbox (import allowlist, curated builtins, "
+        "resource limits); it is not a hardened OS boundary.",
+        "Only each joint's declared parent/child pair is checked for articulation interference; "
+        "pins, bores and hardware clearances are not verified.",
+        "Only static solid geometry is verified; no structural, thermal, dynamic or "
+        "manufacturing analysis is performed.",
+    ),
+    resource_limits={
+        "max_program_seconds": 15.0,
+        "max_export_bytes": 5_000_000.0,
+        "max_parts": 12.0,
+        "max_joints": 6.0,
+    },
+    test_status="tested",
+    domain_terms=(
+        "hinge",
+        "knuckle",
+        "assembly",
+        "assembled",
+        "leaf",
+        "leaves",
+        "pivot",
+        "articulat",
+        "clevis",
+        "hinge pin",
+        "bracket assembly",
+    ),
+)
+
+
 def default_registry() -> CapabilityRegistry:
     registry = CapabilityRegistry()
     registry.register(FOUR_BAR_CAPABILITY)
     registry.register(CUSTOM_PART_CAPABILITY)
+    registry.register(ASSEMBLY_CAPABILITY)
     return registry
 
 
 __all__ = [
+    "ASSEMBLY_CAPABILITY",
     "CUSTOM_PART_CAPABILITY",
     "CapabilityEntry",
     "CapabilityRegistry",

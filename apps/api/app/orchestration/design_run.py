@@ -49,6 +49,8 @@ from app.mechanism.schemas import (
     GeometryArtifact,
     NormalizedBrief,
     PartBrief,
+    ProgramJoint,
+    ProgramPart,
     ProgramRecord,
     RequirementSource,
     RunEventName,
@@ -246,7 +248,7 @@ class DesignRunOrchestrator:
         if missing:
             raise ValueError(f"Missing answers for: {sorted(missing)}")
 
-        if run.capability_id == "custom_part":
+        if run.capability_id in ("custom_part", "assembly"):
             stored = self.artifacts.read_json(run_id, "part_brief.json")
             part_brief = PartBrief.model_validate(stored["brief"])
             try:
@@ -553,7 +555,8 @@ class DesignRunOrchestrator:
                 self._publish_capability_selected(run, assessment)
                 self._complete_without_candidates(run, None, "none", assessment, engine_info)
                 return
-            if entry.capability_id == "custom_part" and not self.meta_client.is_configured:
+            program_capability = entry.capability_id in ("custom_part", "assembly")
+            if program_capability and not self.meta_client.is_configured:
                 assessment = CapabilityAssessment(
                     capability_id=entry.capability_id,
                     capability_version=entry.version,
@@ -569,8 +572,10 @@ class DesignRunOrchestrator:
                 )
                 return
 
-        if run.capability_id == "custom_part":
-            await self._run_part_pipeline(run, resuming=resuming, engine_info=engine_info)
+        if run.capability_id in ("custom_part", "assembly"):
+            await self._run_program_pipeline(
+                run, resuming=resuming, engine_info=engine_info
+            )
         else:
             await self._run_four_bar_pipeline(run, resuming=resuming)
 
@@ -877,12 +882,14 @@ class DesignRunOrchestrator:
             },
         )
 
-    async def _run_part_pipeline(
+    async def _run_program_pipeline(
         self, run: DesignRun, *, resuming: bool, engine_info: dict[str, Any]
     ) -> None:
         provider_calls: list[dict[str, Any]] = []
         source = "meta_model"
-        capability = self.capabilities.get("custom_part")
+        capability_id = run.capability_id or "custom_part"
+        assembly = capability_id == "assembly"
+        capability = self.capabilities.get(capability_id)
         capability_version = capability.version if capability is not None else "0.1.0"
 
         if resuming:
@@ -891,16 +898,21 @@ class DesignRunOrchestrator:
             brief = PartBrief.model_validate(stored["brief"])
         else:
             result = await parse_part_requirements(
-                run.original_prompt, client=self.meta_client
+                run.original_prompt, client=self.meta_client, assembly=assembly
             )
             self._record_completion(provider_calls, "requirements", result.completion)
             if result.brief is None:
                 assessment = CapabilityAssessment(
-                    capability_id="custom_part",
+                    capability_id=capability_id,
                     capability_version=capability_version,
                     status=CapabilitySupport.NOT_SUPPORTED,
                     unsupported_requirements=[
-                        result.reason or "the request is not a single static part"
+                        result.reason
+                        or (
+                            "the request is not an assemblable multi-part product"
+                            if assembly
+                            else "the request is not a single static part"
+                        )
                     ],
                 )
                 self.artifacts.write_json(
@@ -913,7 +925,7 @@ class DesignRunOrchestrator:
                     RunEventName.REQUIREMENTS_READY.value,
                     {
                         "source": source,
-                        "capability": "custom_part",
+                        "capability": capability_id,
                         "supported": False,
                         "reason": result.reason,
                     },
@@ -935,7 +947,7 @@ class DesignRunOrchestrator:
             RunEventName.REQUIREMENTS_READY.value,
             {
                 "source": source,
-                "capability": "custom_part",
+                "capability": capability_id,
                 "part": brief.part.model_dump(mode="json"),
                 "assumptions": brief.assumptions,
                 "unknowns": brief.unknowns,
@@ -968,7 +980,7 @@ class DesignRunOrchestrator:
         assessment = route_request(
             run.original_prompt,
             None,
-            capability_id="custom_part",
+            capability_id=capability_id,
             clarification_answers=run.clarification_answers,
             registry=self.capabilities,
         )
@@ -980,7 +992,7 @@ class DesignRunOrchestrator:
         if unsupported:
             assessment = assessment.model_copy(
                 update={
-                    "capability_id": "custom_part",
+                    "capability_id": capability_id,
                     "capability_version": capability_version,
                     "unsupported_requirements": unsupported,
                     "status": CapabilitySupport.PARTIAL,
@@ -1002,6 +1014,7 @@ class DesignRunOrchestrator:
                 attempt_number=attempt,
                 max_attempts=run.max_candidates,
                 previous_feedback=previous_feedback,
+                assembly=assembly,
             )
             self._record_completion(provider_calls, f"program_{attempt:03d}", completion)
             source_hash = hashlib.sha256(program.source.encode("utf-8")).hexdigest()
@@ -1037,15 +1050,40 @@ class DesignRunOrchestrator:
             deterministic: bool | None = None
             artifact_id: str | None = None
             artifact_hash: str | None = None
+            program_parts: list[ProgramPart] = []
+            program_joints: list[ProgramJoint] = []
             if execution is not None and execution.status == "executed":
                 second = run_design_program(program)
                 deterministic = (
-                    second.status == "executed" and second.sha256 == execution.sha256
+                    second.status == "executed"
+                    and second.sha256 == execution.sha256
+                    and {part.name: part.sha256 for part in second.parts}
+                    == {part.name: part.sha256 for part in execution.parts}
                 )
                 artifact_id = f"geometry_program_{attempt:03d}.stl"
                 if execution.stl is not None:
                     self.artifacts.write_bytes(run.run_id, artifact_id, execution.stl)
                 artifact_hash = execution.sha256
+                for part in execution.parts:
+                    part_artifact_id = (
+                        f"geometry_program_{attempt:03d}_{part.name}.stl"
+                    )
+                    self.artifacts.write_bytes(
+                        run.run_id, part_artifact_id, part.stl
+                    )
+                    program_parts.append(
+                        ProgramPart(
+                            name=part.name,
+                            artifact_id=part_artifact_id,
+                            artifact_hash=part.sha256,
+                            triangle_count=part.stats.triangle_count,
+                            width_mm=part.stats.width_mm,
+                            height_mm=part.stats.height_mm,
+                            thickness_mm=part.stats.thickness_mm,
+                            volume_mm3=part.stats.volume_mm3,
+                        )
+                    )
+                program_joints = list(execution.joints)
                 geometry_artifacts.append(
                     GeometryArtifact(
                         artifact_id=artifact_id,
@@ -1070,6 +1108,8 @@ class DesignRunOrchestrator:
                         "artifact_hash": artifact_hash,
                         "generation_status": "generated",
                         "deterministic": deterministic,
+                        "parts": [part.name for part in execution.parts],
+                        "joints": [joint.name for joint in execution.joints],
                     },
                 )
 
@@ -1079,6 +1119,7 @@ class DesignRunOrchestrator:
                 execution,
                 program_id=program.program_id,
                 deterministic=deterministic,
+                require_assembly=assembly,
             )
             if rejection is not None:
                 evaluation = evaluation.model_copy(
@@ -1098,6 +1139,8 @@ class DesignRunOrchestrator:
                 execution_status=execution.status if execution is not None else "rejected",
                 duration_ms=execution.duration_ms if execution is not None else None,
                 error=rejection or (execution.error if execution is not None else None),
+                parts=program_parts,
+                joints=program_joints,
                 evaluation=evaluation,
             )
             programs.append(record)
@@ -1186,7 +1229,18 @@ class DesignRunOrchestrator:
             final_candidate_id=final_record.program.program_id,
             no_pass=no_pass,
             outcome="no_pass" if no_pass else "passed",
-            limitations=PART_CLAIM_LIMITATIONS,
+            limitations=[
+                *PART_CLAIM_LIMITATIONS,
+                *(
+                    [
+                        "Only each joint's declared parent/child pair is checked for "
+                        "articulation interference; pins, bores and hardware clearances "
+                        "are not verified."
+                    ]
+                    if assembly
+                    else []
+                ),
+            ],
             manifest=self.artifacts.manifest(run.run_id),
             geometry_artifacts=geometry_artifacts,
         )
