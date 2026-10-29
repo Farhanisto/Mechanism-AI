@@ -8,16 +8,27 @@ mesh about the declared joint axis and re-checks the jointed pair.
 
 import io
 import math
+from typing import Any
 
 import numpy as np
-import trimesh
-from trimesh.proximity import ProximityQuery
 
 INTERFERENCE_DEPTH_MM = 0.2
 MAX_SAMPLES = 300
 
 
-def load_mesh(data: bytes) -> trimesh.Trimesh:
+def _trimesh() -> Any:
+    try:
+        import trimesh
+    except ImportError as exc:
+        raise RuntimeError(
+            "mesh interference checks require the optional CAD dependencies "
+            "(`uv sync --extra cad`)"
+        ) from exc
+    return trimesh
+
+
+def load_mesh(data: bytes) -> Any:
+    trimesh = _trimesh()
     mesh = trimesh.load(io.BytesIO(data), file_type="stl")
     if not isinstance(mesh, trimesh.Trimesh) or len(mesh.faces) == 0:
         raise ValueError("the artifact is not a valid triangle mesh")
@@ -30,7 +41,8 @@ def rotated_mesh(
     axis: tuple[float, float, float],
     origin: tuple[float, float, float],
     angle_deg: float,
-) -> trimesh.Trimesh:
+) -> Any:
+    trimesh = _trimesh()
     mesh = load_mesh(data)
     matrix = trimesh.transformations.rotation_matrix(
         math.radians(angle_deg),
@@ -42,12 +54,14 @@ def rotated_mesh(
 
 
 def meshes_interfere(
-    first: bytes | trimesh.Trimesh,
-    second: bytes | trimesh.Trimesh,
+    first: bytes | Any,
+    second: bytes | Any,
     *,
     min_depth_mm: float = INTERFERENCE_DEPTH_MM,
     max_samples: int = MAX_SAMPLES,
 ) -> bool:
+    from trimesh.proximity import ProximityQuery
+
     first_mesh = load_mesh(first) if isinstance(first, bytes) else first
     second_mesh = load_mesh(second) if isinstance(second, bytes) else second
     samples = first_mesh.triangles_center
