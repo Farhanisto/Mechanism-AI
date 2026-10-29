@@ -33,14 +33,16 @@ Working today:
   (pass/fail/boundary/invalid cases) and bounded repair (see `apps/api/benchmarks/`)
 - JSON evidence persistence per run: run, brief, candidates, simulations and evidence bundle,
   with SHA-256 artifact hashes, timestamps and SQLite metadata for reconstruction
+- Parametric CAD: deterministic CadQuery/OpenCascade link-set compiler producing validated STL
+  geometry artifacts with SHA-256 hashes (optional `cad` extra)
 - React + TypeScript + Vite UI with prompt form, live event log, validation report, candidate
   history and a rendered reference trace
 - Docker Compose setup for the API and web app
 
 Not wired yet:
 
-1. Physical link thickness, obstacle geometry and a broader collision model. The MVP checks
-   zero-thickness moving links and treats the ground link as a fixed frame.
+1. Collision evaluation still treats links as zero-thickness line segments; the generated CAD
+   link set has bar width and thickness, but obstacles and frame contact are not modeled.
 2. A broader independently reviewed benchmark suite and a formal physical-feasibility review.
 
 A candidate that fails evaluation produces a completed run with `no_pass: true`, not a fake
@@ -54,7 +56,7 @@ API:
 
 ```bash
 cd apps/api
-uv sync            # add --extra sim to enable the MuJoCo engine
+uv sync            # add --extra sim for MuJoCo and --extra cad for CAD geometry
 uv run uvicorn app.main:app --reload --port 8000
 ```
 
@@ -135,6 +137,28 @@ is **0.05 mm**; observed deviation on the fallback linkages is below 0.001 mm. A
 cannot close the loop, turns non-finite, or is not assemblable at the start angle produces a
 structured `simulation_valid: false` result with a failure reason, never a crash.
 
+## Geometry artifacts
+
+Supported candidates are compiled into parametric CAD geometry with CadQuery/OpenCascade
+(`uv sync --extra cad`). Open decision 1 is resolved as **STL first**: binary STL is the validated
+export format because it is deterministic, directly renderable, and verifiable; STEP export is
+deferred until a determinism and round-trip strategy for its timestamped header is defined.
+
+- The server builds a typed `DesignPlan` (components, joints, whitelisted geometry operations,
+  required checks, resource budget) from the evaluated candidate - plans are data and never
+  contain code. The compiler rejects unsupported capabilities, operations, joint/component kinds,
+  out-of-range parameters and geometry that disagrees with the declared link lengths.
+- Compilation uses fixed tessellation tolerances, so the same plan and compiler version produce
+  byte-identical STL output. The SHA-256 hash is recorded in `geometry_artifacts` in the evidence
+  bundle, the artifact manifest and the SQLite metadata.
+- Validation results are stored with every artifact: non-empty mesh, all joints inside the mesh
+  bounding box, positive closed volume and export size within the plan budget. Failed validation
+  is reported honestly and the artifact is not advertised as generated.
+- Artifacts are downloadable as binary (`GET /api/v1/design-runs/{run_id}/artifacts/geometry_*.stl`,
+  `model/stl`); the `geometry_validated` event reports each candidate's artifact and hash.
+- Limitations: the link set is a planar four-bar with rectangular bars and pin holes; no fillets,
+  threads, fasteners, obstacles or frame contact are modeled.
+
 ## API
 
 | Method | Endpoint | Purpose |
@@ -146,7 +170,7 @@ structured `simulation_valid: false` result with a failure reason, never a crash
 | `GET` | `/api/v1/design-runs/{run_id}/evidence` | Evidence summary, human-readable report, artifact manifest with hashes |
 | `POST` | `/api/v1/design-runs/{run_id}/clarifications` | Answer blocking clarification questions and resume the run |
 | `POST` | `/api/v1/design-runs/{run_id}/cancel` | Request cooperative cancellation (idempotent) |
-| `GET` | `/api/v1/design-runs/{run_id}/artifacts/{name}` | Persisted JSON artifact, e.g. `run.json` |
+| `GET` | `/api/v1/design-runs/{run_id}/artifacts/{name}` | Persisted artifact: JSON (`run.json`) or binary (`geometry_*.stl`) |
 | `GET` | `/api/v1/health` | Health check |
 
 Artifacts per run: `run.json`, `brief.json`, `candidates.json`, `simulation_<candidate_id>.json`
@@ -172,7 +196,8 @@ npm run typecheck
 npm run build
 ```
 
-Evaluator, kinematics, parser and API tests run without a live model or simulator. The Meta
+Evaluator, kinematics, parser and API tests run without a live model or simulator. CAD tests
+run when the `cad` extra is installed and skip otherwise. The Meta
 adapter tests use `httpx.MockTransport`; a live smoke test is intentionally opt-in. Compiler,
 MuJoCo runner and reference-comparison tests run when the `sim` extra is installed and skip
 otherwise. The reviewed benchmark suites in `apps/api/benchmarks/` run as part of the suite;

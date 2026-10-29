@@ -8,6 +8,7 @@ from app.ai.meta_client import (
     MetaModelRequestError,
     ModelCompletion,
 )
+from app.cad.compiler import is_cad_available
 from app.evaluation.evaluator import evaluate_candidate
 from app.mechanism.kinematics import KinematicsError
 from app.mechanism.schemas import (
@@ -283,6 +284,9 @@ async def test_event_order_matches_the_contract(tmp_path: Path) -> None:
     await orchestrator.execute(run.run_id)
 
     event_names = await replay_events(broker, run.run_id)
+    if is_cad_available():
+        assert "geometry_validated" in event_names
+        event_names = [name for name in event_names if name != "geometry_validated"]
     assert event_names == [
         "run_started",
         "requirements_ready",

@@ -286,6 +286,7 @@ class RunEventName(StrEnum):
     CLARIFICATION_REQUIRED = "clarification_required"
     CAPABILITY_SELECTED = "capability_selected"
     CANDIDATE_GENERATED = "candidate_generated"
+    GEOMETRY_VALIDATED = "geometry_validated"
     SIMULATION_COMPLETED = "simulation_completed"
     EVALUATION_COMPLETED = "evaluation_completed"
     REPAIR_STARTED = "repair_started"
@@ -390,3 +391,4 @@ class EvidenceBundle(BaseModel):
     outcome: str
     limitations: list[str] = Field(default_factory=list)
     manifest: list[ArtifactManifestEntry] = Field(default_factory=list)
+    geometry_artifacts: list[GeometryArtifact] = Field(default_factory=list)

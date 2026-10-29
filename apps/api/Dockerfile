@@ -6,16 +6,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_LINK_MODE=copy
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libegl1 libgl1 libosmesa6 \
+    && apt-get install -y --no-install-recommends libegl1 libgl1 libglu1-mesa libosmesa6 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/apps/api
 
 COPY apps/api/pyproject.toml apps/api/uv.lock ./
-RUN uv sync --frozen --no-dev --extra sim
+RUN uv sync --frozen --no-dev --extra sim --extra cad
 
 COPY apps/api/app ./app
 
 EXPOSE 8000
 
-CMD ["uv", "run", "--frozen", "--no-dev", "--extra", "sim", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "--frozen", "--no-dev", "--extra", "sim", "--extra", "cad", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

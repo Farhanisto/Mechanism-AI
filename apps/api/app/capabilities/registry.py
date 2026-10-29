@@ -64,7 +64,7 @@ FOUR_BAR_CAPABILITY = CapabilityEntry(
     version="0.1.0",
     domain="planar four-bar linkage mechanisms",
     input_schema="NormalizedBrief",
-    output_schema="Candidate",
+    output_schema="Candidate + GeometryArtifact (stl)",
     units="mm",
     parameter_constraints={
         "link lengths": "positive, at most 10000 mm",

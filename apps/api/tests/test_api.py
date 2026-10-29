@@ -227,3 +227,21 @@ def test_clarifications_endpoint_conflicts(client: TestClient) -> None:
         json={"answers": {"any": "yes"}},
     )
     assert missing.status_code == 404
+
+
+def test_geometry_artifact_is_served_binary(client: TestClient) -> None:
+    from app.cad.compiler import is_cad_available
+
+    if not is_cad_available():
+        pytest.skip("cadquery is not installed")
+
+    run_id = client.post("/api/v1/design-runs", json={"prompt": PROMPT}).json()["run_id"]
+    run = client.get(f"/api/v1/design-runs/{run_id}").json()
+    name = f"geometry_{run['final_candidate_id']}.stl"
+
+    response = client.get(f"/api/v1/design-runs/{run_id}/artifacts/{name}")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("model/stl")
+    assert response.headers["content-disposition"].startswith("attachment")
+    assert len(response.content) > 84

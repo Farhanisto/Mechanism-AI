@@ -62,6 +62,36 @@ class ArtifactStore:
         ]
         return sorted(entries, key=lambda entry: entry.name)
 
+    def write_bytes(self, run_id: str, name: str, data: bytes) -> Path:
+        self._validate_name(name)
+        path = self.run_dir(run_id) / name
+        handle, temp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+        try:
+            with os.fdopen(handle, "wb") as file:
+                file.write(data)
+            os.replace(temp_path, path)
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+
+        entry = ArtifactManifestEntry(
+            name=name,
+            sha256=hashlib.sha256(data).hexdigest(),
+            size_bytes=len(data),
+            written_at=datetime.now(UTC).isoformat(),
+        )
+        self._writes[(run_id, name)] = entry
+        if self.metadata is not None:
+            self.metadata.record_artifact(run_id, entry)
+        return path
+
+    def read_bytes(self, run_id: str, name: str) -> bytes | None:
+        self._validate_name(name)
+        path = self.run_dir(run_id) / name
+        if not path.is_file():
+            return None
+        return path.read_bytes()
+
     def read_json(self, run_id: str, name: str) -> Any | None:
         self._validate_name(name)
         path = self.run_dir(run_id) / name

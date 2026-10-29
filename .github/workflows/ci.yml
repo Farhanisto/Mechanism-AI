@@ -24,10 +24,10 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install MuJoCo system libraries
         if: matrix.sim
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libosmesa6
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1 libglu1-mesa libosmesa6
       - name: Install dependencies
         working-directory: apps/api
-        run: uv sync --frozen ${{ matrix.sim && '--extra sim' || '' }}
+        run: uv sync --frozen ${{ matrix.sim && '--extra sim --extra cad' || '' }}
       - name: Ruff
         working-directory: apps/api
         run: uv run --no-sync ruff check .

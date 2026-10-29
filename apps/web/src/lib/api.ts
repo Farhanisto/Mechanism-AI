@@ -65,6 +65,7 @@ export interface Candidate {
   input_motion: InputMotion;
   generated_at: string;
   attempt_number: number;
+  geometry_artifact_id?: string | null;
 }
 
 export interface CandidateMetrics {
@@ -178,6 +179,7 @@ const EVENT_NAMES = [
   "clarification_required",
   "capability_selected",
   "candidate_generated",
+  "geometry_validated",
   "simulation_completed",
   "evaluation_completed",
   "repair_started",
@@ -235,6 +237,10 @@ export function submitClarifications(
 
 export function getArtifact<T>(runId: string, name: string): Promise<T> {
   return request<T>(`/design-runs/${runId}/artifacts/${encodeURIComponent(name)}`);
+}
+
+export function artifactUrl(runId: string, name: string): string {
+  return `${API_BASE}/design-runs/${runId}/artifacts/${encodeURIComponent(name)}`;
 }
 
 export type StreamStatus = "live" | "reconnecting";

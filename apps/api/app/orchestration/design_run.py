@@ -18,6 +18,14 @@ from app.ai.meta_client import (
     UnconfiguredMetaModelClient,
 )
 from app.ai.requirements_parser import default_brief_from_prompt, parse_requirements
+from app.cad.compiler import (
+    COMPILER_VERSION as CAD_COMPILER_VERSION,
+)
+from app.cad.compiler import (
+    compile_plan,
+    is_cad_available,
+)
+from app.cad.plan import InvalidPlanError, plan_from_candidate
 from app.capabilities.registry import CapabilityRegistry, default_registry
 from app.capabilities.router import route_request
 from app.evaluation.evaluator import EVALUATOR_VERSION, evaluate_candidate
@@ -25,6 +33,7 @@ from app.evaluation.metrics import measure_simulation
 from app.mechanism.kinematics import DEFAULT_SAMPLE_COUNT, KinematicsError
 from app.mechanism.schemas import (
     TERMINAL_EVENTS,
+    Candidate,
     CandidateRecord,
     CapabilityAssessment,
     CapabilitySupport,
@@ -33,12 +42,14 @@ from app.mechanism.schemas import (
     DesignRunCreateRequest,
     EvaluationStatus,
     EvidenceBundle,
+    GeometryArtifact,
     NormalizedBrief,
     RequirementSource,
     RunEventName,
     RunStatus,
     SimulationEngineInfo,
     Stage,
+    Units,
 )
 from app.persistence.artifacts import ArtifactStore
 from app.persistence.metadata import MetadataStore
@@ -482,6 +493,7 @@ class DesignRunOrchestrator:
         self._check_cancel(run)
 
         records: list[CandidateRecord] = []
+        geometry_artifacts: list[GeometryArtifact] = []
         previous: CandidateRecord | None = None
         passed_record: CandidateRecord | None = None
 
@@ -511,6 +523,27 @@ class DesignRunOrchestrator:
                     "parameters": candidate.parameters.model_dump(mode="json"),
                 },
             )
+
+            self._update_run(run, stage=Stage.COMPILE_MODEL)
+            geometry_artifact = self._compile_geometry(run, candidate)
+            if geometry_artifact is not None:
+                if geometry_artifact.generation_status == "generated":
+                    candidate = candidate.model_copy(
+                        update={"geometry_artifact_id": geometry_artifact.artifact_id}
+                    )
+                geometry_artifacts.append(geometry_artifact)
+                self.events.publish(
+                    run.run_id,
+                    RunEventName.GEOMETRY_VALIDATED.value,
+                    {
+                        "candidate_id": candidate.candidate_id,
+                        "artifact_id": geometry_artifact.artifact_id,
+                        "format": geometry_artifact.format,
+                        "artifact_hash": geometry_artifact.artifact_hash,
+                        "generation_status": geometry_artifact.generation_status,
+                        "validation_results": geometry_artifact.validation_results,
+                    },
+                )
 
             self._update_run(run, stage=Stage.SIMULATE)
             simulation = run_candidate_simulation(
@@ -623,6 +656,7 @@ class DesignRunOrchestrator:
             outcome="no_pass" if no_pass else "passed",
             limitations=CLAIM_LIMITATIONS,
             manifest=self.artifacts.manifest(run.run_id),
+            geometry_artifacts=geometry_artifacts,
         )
         self.artifacts.write_json(run.run_id, "evidence.json", bundle)
         self.events.publish(
@@ -715,6 +749,39 @@ class DesignRunOrchestrator:
                 "no_pass": True,
             },
         )
+
+    def _compile_geometry(
+        self, run: DesignRun, candidate: Candidate
+    ) -> GeometryArtifact | None:
+        """Compile the candidate into a geometry artifact when CAD is available."""
+        if not is_cad_available():
+            return None
+        artifact_id = f"geometry_{candidate.candidate_id}.stl"
+        try:
+            plan = plan_from_candidate(candidate)
+            compiled = compile_plan(plan, artifact_id=artifact_id)
+        except InvalidPlanError as exc:
+            return GeometryArtifact(
+                artifact_id=artifact_id,
+                format="stl",
+                units=Units.MM,
+                compiler_version=CAD_COMPILER_VERSION,
+                generation_status="failed",
+                error=f"invalid plan: {exc}",
+            )
+        except Exception:
+            logger.exception("CAD compilation failed for %s", candidate.candidate_id)
+            return GeometryArtifact(
+                artifact_id=artifact_id,
+                format="stl",
+                units=Units.MM,
+                compiler_version=CAD_COMPILER_VERSION,
+                generation_status="failed",
+                error="the CAD compiler failed unexpectedly",
+            )
+        if compiled.artifact.generation_status == "generated":
+            self.artifacts.write_bytes(run.run_id, artifact_id, compiled.data)
+        return compiled.artifact
 
     @staticmethod
     def _record_completion(

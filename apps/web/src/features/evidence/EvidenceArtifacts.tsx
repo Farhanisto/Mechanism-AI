@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import {
+  artifactUrl,
   getArtifact,
   type CandidateRecord,
   type DesignRun,
@@ -31,6 +32,9 @@ export function EvidenceArtifacts({ run, candidates }: EvidenceArtifactsProps) {
     ...candidates.map(
       (record) => `simulation_${record.candidate.candidate_id}.json`,
     ),
+    ...candidates
+      .map((record) => record.candidate.geometry_artifact_id)
+      .filter((name): name is string => Boolean(name)),
     "evidence.json",
     ...(run.error_code ? ["error.json"] : []),
   ];
@@ -78,6 +82,22 @@ export function EvidenceArtifacts({ run, candidates }: EvidenceArtifactsProps) {
       <ul className="artifact-list">
         {names.map((name) => {
           const state = artifacts[name] ?? { status: "idle" as const };
+          if (!name.endsWith(".json")) {
+            return (
+              <li key={name} className="artifact-item">
+                <span className="artifact-binary">
+                  <code>{name}</code>
+                </span>
+                <a
+                  className="artifact-download"
+                  href={artifactUrl(run.run_id, name)}
+                  download={name}
+                >
+                  Download
+                </a>
+              </li>
+            );
+          }
           return (
             <li key={name} className="artifact-item">
               <details
