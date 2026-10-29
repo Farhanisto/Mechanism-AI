@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { RunStatusPanel } from "../components/RunStatusPanel";
-import type { BriefArtifact, DesignRun } from "../lib/api";
+import type { BriefArtifact, DesignRun, PartBriefArtifact } from "../lib/api";
 import { RequirementsPanel } from "./requirements/RequirementsPanel";
 
 const run: DesignRun = {
@@ -36,6 +36,53 @@ const brief: BriefArtifact = {
     },
   },
 };
+
+const partBrief: PartBriefArtifact = {
+  source: "meta_model",
+  brief: {
+    part: {
+      description: "Simplified helmet outer shell",
+      max_width_mm: 280,
+      max_height_mm: 300,
+      max_thickness_mm: 350,
+      notes: [],
+    },
+    assumptions: ["Shell only."],
+    unknowns: [],
+    unsupported_requirements: ["visor mechanism", "impact protection and certification"],
+    requirement_sources: { "part.max_width_mm": "ai_proposed" },
+  },
+};
+
+describe("Part requirements", () => {
+  it("lists omitted components and analyses as not evaluated", () => {
+    render(
+      <RequirementsPanel
+        briefArtifact={null}
+        partBrief={partBrief}
+        expert={false}
+      />,
+    );
+
+    expect(screen.getByText(/Simplified helmet outer shell/)).toBeTruthy();
+    expect(screen.getByText(/Not evaluated: visor mechanism/)).toBeTruthy();
+    expect(
+      screen.getByText(/Not evaluated: impact protection and certification/),
+    ).toBeTruthy();
+  });
+
+  it("renders the model's rejection reason for unsupported requests", () => {
+    render(
+      <RequirementsPanel
+        briefArtifact={null}
+        partBrief={{ source: "meta_model", supported: false, reason: "multi-component product" }}
+        expert={false}
+      />,
+    );
+
+    expect(screen.getByText(/Not supported as a single static part/)).toBeTruthy();
+  });
+});
 
 describe("Beginner and Expert views", () => {
   it("hides requirement provenance in beginner mode", () => {

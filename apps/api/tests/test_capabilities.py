@@ -34,6 +34,16 @@ def test_default_registry_contains_the_tested_four_bar_capability() -> None:
     assert entry.parameter_constraints
 
 
+def test_default_registry_contains_the_model_authored_part_capability() -> None:
+    registry = default_registry()
+    entry = registry.get("custom_part")
+
+    assert entry is not None
+    assert entry.test_status == "tested"
+    assert "envelope_width" in entry.evaluation_checks
+    assert "best-effort sandbox" in " ".join(entry.known_limitations)
+
+
 def test_registry_rejects_unknown_fields() -> None:
     with pytest.raises(ValueError):
         CapabilityEntry(

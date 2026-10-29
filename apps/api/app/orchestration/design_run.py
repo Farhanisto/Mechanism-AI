@@ -521,16 +521,24 @@ class DesignRunOrchestrator:
         if not resuming:
             entry = self.capabilities.match_domain(run.original_prompt)
             if entry is None:
-                assessment = route_request(
-                    run.original_prompt,
-                    None,
-                    clarification_answers={},
-                    registry=self.capabilities,
-                )
-                self._update_run(run, capability_id="none")
-                self._publish_capability_selected(run, assessment)
-                self._complete_without_candidates(run, None, "none", assessment, engine_info)
-                return
+                fallback = self.capabilities.get("custom_part")
+                if self.meta_client.is_configured and fallback is not None:
+                    # No specific capability matched: let the model decide whether the
+                    # request can be expressed as (simplified) solid geometry.
+                    entry = fallback
+                else:
+                    assessment = route_request(
+                        run.original_prompt,
+                        None,
+                        clarification_answers={},
+                        registry=self.capabilities,
+                    )
+                    self._update_run(run, capability_id="none")
+                    self._publish_capability_selected(run, assessment)
+                    self._complete_without_candidates(
+                        run, None, "none", assessment, engine_info
+                    )
+                    return
             run.capability_id = entry.capability_id
             self._update_run(run)
             if not entry.is_selectable():
@@ -931,6 +939,7 @@ class DesignRunOrchestrator:
                 "part": brief.part.model_dump(mode="json"),
                 "assumptions": brief.assumptions,
                 "unknowns": brief.unknowns,
+                "unsupported_requirements": brief.unsupported_requirements,
                 "requirement_sources": {
                     field: requirement.value
                     for field, requirement in brief.requirement_sources.items()
@@ -959,14 +968,24 @@ class DesignRunOrchestrator:
         assessment = route_request(
             run.original_prompt,
             None,
+            capability_id="custom_part",
             clarification_answers=run.clarification_answers,
             registry=self.capabilities,
-        ).model_copy(
-            update={
-                "capability_id": "custom_part",
-                "capability_version": capability_version,
-            }
         )
+        unsupported = list(
+            dict.fromkeys(
+                [*assessment.unsupported_requirements, *brief.unsupported_requirements]
+            )
+        )
+        if unsupported:
+            assessment = assessment.model_copy(
+                update={
+                    "capability_id": "custom_part",
+                    "capability_version": capability_version,
+                    "unsupported_requirements": unsupported,
+                    "status": CapabilitySupport.PARTIAL,
+                }
+            )
         self._publish_capability_selected(run, assessment)
 
         programs: list[ProgramRecord] = []

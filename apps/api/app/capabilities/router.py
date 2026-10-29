@@ -21,6 +21,20 @@ DEMAND_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     ("thermal", ("temperature", "heat", "thermal")),
     ("dynamics", ("vibration", "frequency", "resonance")),
+    (
+        "safety_certification",
+        (
+            "helmet",
+            "protective",
+            "safety",
+            "crash",
+            "impact",
+            "certif",
+            "ppe",
+            "child seat",
+            "medical",
+        ),
+    ),
 )
 
 _SCOPE_WAIVER_QUESTION_ID = "verification_scope"
@@ -39,13 +53,18 @@ def route_request(
     prompt: str,
     brief: NormalizedBrief | None = None,
     *,
+    capability_id: str | None = None,
     requested_checks: tuple[str, ...] = (),
     clarification_answers: dict[str, str],
     registry: CapabilityRegistry | None = None,
 ) -> CapabilityAssessment:
     """Route a request and report what is supported, partial and unsupported."""
     registry = registry or default_registry()
-    entry = registry.match_domain(prompt)
+    entry = (
+        registry.get(capability_id)
+        if capability_id is not None
+        else registry.match_domain(prompt)
+    )
     if entry is None:
         return CapabilityAssessment(
             capability_id="none",

@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.ai.meta_client import MetaModelClient, ModelCompletion
+from app.capabilities.router import detected_demand_categories
 from app.mechanism.schemas import (
     ClarificationQuestion,
     HardConstraints,
@@ -29,10 +30,6 @@ _STANDARD_ASSUMPTIONS = (
     "Links are zero-thickness line segments; ground/frame contact is not a collision.",
 )
 _MM_PATTERN = re.compile(r"(?P<value>\d+(?:\.\d+)?)\s*mm", re.IGNORECASE)
-_UNSUPPORTED_CHECK_PATTERN = re.compile(
-    r"\b(load|loads|force|forces|weight|torque|stress|strength|temperature|pressure)\b",
-    re.IGNORECASE,
-)
 _UNMODELED_MOTION_PATTERN = re.compile(
     r"\b(vertical|rotate|rotates|rotary|rotating|circular|spiral)\b",
     re.IGNORECASE,
@@ -93,15 +90,15 @@ def policy_clarification_questions(prompt: str) -> list[ClarificationQuestion]:
     acceptance scope.
     """
     questions: list[ClarificationQuestion] = []
-    if _UNSUPPORTED_CHECK_PATTERN.search(prompt):
+    if detected_demand_categories(prompt):
         questions.append(
             ClarificationQuestion(
                 question_id="verification_scope",
                 question=(
-                    "The request mentions loading or environmental conditions (for "
-                    "example load, force or temperature) that the current kinematic "
-                    "and geometric evaluator cannot verify. Continue with kinematic "
-                    "and geometric checks only?"
+                    "The request involves conditions or certifications the current "
+                    "evaluator cannot verify (for example loads, temperature, dynamics "
+                    "or safety certification). Continue with geometric and (where "
+                    "applicable) kinematic checks only?"
                 ),
                 field="verification_scope.kinematic_only",
                 blocking=True,

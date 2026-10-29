@@ -45,6 +45,14 @@ export function RequirementsPanel({
               Unknowns using documented defaults: {partBrief.brief.unknowns.join(", ")}
             </p>
           ) : null}
+          {partBrief.brief.unsupported_requirements &&
+          partBrief.brief.unsupported_requirements.length > 0 ? (
+            <ul className="failure-list">
+              {partBrief.brief.unsupported_requirements.map((item) => (
+                <li key={item}>Not evaluated: {item}</li>
+              ))}
+            </ul>
+          ) : null}
           {expert && partBrief.brief.requirement_sources ? (
             <details>
               <summary>Requirement provenance</summary>

@@ -20,12 +20,19 @@ from app.ai.requirements_parser import (
 from app.mechanism.schemas import ClarificationQuestion, PartBrief, PartRequirements
 
 PART_SYSTEM_PROMPT = """You convert a mechanical design request into strict JSON for one
-static parametric part. Set supported=false with a short reason when the request is not a
-single static part inside a bounding envelope (for example a whole vehicle, a moving
-assembly or a multi-component product). Use millimetres. Estimate a practical bounding
-envelope from the request. Record inferred values in assumptions, mark provenance, and ask
-a blocking clarification question only when missing information would materially change the
-part. Do not invent requirements the request does not state."""
+static solid part, or a simplified representative geometry when the full product is out of
+scope (for example a mounting plate, bracket, spacer, shell or enclosure body). Use
+millimetres and estimate a practical bounding envelope from the request.
+
+Set supported=false with a short reason only when no meaningful single solid can represent
+part of the request. When you produce simplified geometry for a larger product, name exactly
+what geometry is being produced in description, and list every omitted component, mechanism
+and analysis in unsupported_requirements (for example a visor mechanism, padding, impact
+protection or certification).
+
+Record inferred values in assumptions, mark provenance, and ask a blocking clarification
+question only when missing information would materially change the part. Do not invent
+requirements the request does not state."""
 
 
 class PartBriefProposal(BaseModel):
@@ -39,6 +46,7 @@ class PartBriefProposal(BaseModel):
     max_thickness_mm: float = Field(gt=0, le=1_000)
     assumptions: list[str]
     unknowns: list[str]
+    unsupported_requirements: list[str]
     clarification_questions: list[ClarificationQuestionProposal]
     requirement_sources: list[RequirementSourceProposal]
 
@@ -87,6 +95,7 @@ async def parse_part_requirements(
         ),
         assumptions=proposal.assumptions,
         unknowns=proposal.unknowns,
+        unsupported_requirements=proposal.unsupported_requirements,
         clarification_questions=questions,
         requirement_sources={
             item.field: item.source for item in proposal.requirement_sources

@@ -160,6 +160,7 @@ export interface PartBriefArtifact {
     part: PartRequirements;
     assumptions: string[];
     unknowns: string[];
+    unsupported_requirements?: string[];
     requirement_sources?: Record<string, string>;
     clarification_questions?: ClarificationQuestion[];
   };

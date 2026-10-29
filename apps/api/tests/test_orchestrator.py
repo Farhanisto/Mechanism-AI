@@ -468,9 +468,11 @@ async def test_invalid_clarification_answers_are_rejected(tmp_path: Path) -> Non
 
 
 async def test_unsupported_prompt_completes_without_candidates(tmp_path: Path) -> None:
-    orchestrator, broker = make_orchestrator(
-        tmp_path, ScriptedMetaClient(candidate_payloads=[])
+    artifacts = ArtifactStore(tmp_path)
+    orchestrator = DesignRunOrchestrator(
+        store=RunStore(artifacts), events=EventBroker(), artifacts=artifacts
     )
+    broker = orchestrator.events
     run = orchestrator.create_run(
         DesignRunCreateRequest(
             prompt=(

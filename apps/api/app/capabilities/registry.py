@@ -110,7 +110,7 @@ FOUR_BAR_CAPABILITY = CapabilityEntry(
 CUSTOM_PART_CAPABILITY = CapabilityEntry(
     capability_id="custom_part",
     version="0.1.0",
-    domain="single static parametric part inside a bounding envelope",
+    domain="single static part or simplified representative geometry inside a bounding envelope",
     input_schema="PartBrief",
     output_schema="DesignProgram + GeometryArtifact (stl)",
     units="mm",
@@ -130,7 +130,9 @@ CUSTOM_PART_CAPABILITY = CapabilityEntry(
     known_limitations=(
         "Design programs run in a best-effort sandbox (import allowlist, curated builtins, "
         "resource limits); it is not a hardened OS boundary.",
-        "Only static single-part geometry is verified; no strength, thermal or dynamic analysis.",
+        "Only static single-solid geometry is verified; no strength, thermal or dynamic analysis.",
+        "Requests beyond a single part are reduced to simplified representative geometry; the "
+        "full product, its mechanisms and its certifications are not modeled.",
         "Moving assemblies and multi-component products are not supported.",
     ),
     resource_limits={

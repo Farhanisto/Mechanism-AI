@@ -94,7 +94,9 @@ class ScriptedClient:
         return None
 
 
-def part_brief_payload(*, supported: bool = True) -> dict[str, Any]:
+def part_brief_payload(
+    *, supported: bool = True, unsupported: list[str] | None = None
+) -> dict[str, Any]:
     return {
         "supported": supported,
         "reason": "" if supported else "a motorbike umbrella is not a single static part",
@@ -103,6 +105,7 @@ def part_brief_payload(*, supported: bool = True) -> dict[str, Any]:
         "max_height_mm": 60.0,
         "max_thickness_mm": 8.0,
         "assumptions": ["Envelope inferred from the request."],
+        "unsupported_requirements": unsupported or [],
         "unknowns": [],
         "clarification_questions": [],
         "requirement_sources": [],
@@ -191,6 +194,61 @@ def make_orchestrator(tmp_path: Path, client: ScriptedClient) -> DesignRunOrches
         artifacts=artifacts,
         meta_client=client,
     )
+
+
+async def test_unmatched_prompt_falls_back_to_model_authored_capability(
+    tmp_path: Path,
+) -> None:
+    client = ScriptedClient([part_brief_payload(), program_payload(GOOD_PROGRAM)])
+    orchestrator = make_orchestrator(tmp_path, client)
+    run = orchestrator.create_run(
+        DesignRunCreateRequest(prompt="Design a wall hook, 40 x 30 x 10 mm.")
+    )
+
+    await orchestrator.execute(run.run_id)
+
+    stored = orchestrator.store.get(run.run_id)
+    assert stored is not None
+    assert stored.capability_id == "custom_part"
+    assert stored.no_pass is False
+
+
+async def test_safety_critical_request_pauses_and_stays_partial(tmp_path: Path) -> None:
+    client = ScriptedClient(
+        [
+            part_brief_payload(
+                unsupported=["impact protection", "visor mechanism", "certification"]
+            ),
+            program_payload(GOOD_PROGRAM),
+        ]
+    )
+    orchestrator = make_orchestrator(tmp_path, client)
+    run = orchestrator.create_run(
+        DesignRunCreateRequest(prompt="Design a motorcycle helmet shell.")
+    )
+
+    await orchestrator.execute(run.run_id)
+
+    paused = orchestrator.store.get(run.run_id)
+    assert paused is not None
+    assert paused.status.value == "awaiting_clarification"
+    assert any(
+        question.field == "verification_scope.kinematic_only"
+        for question in paused.pending_clarifications
+    )
+
+    orchestrator.submit_clarifications(run.run_id, {"verification_scope": "yes"})
+    await orchestrator.execute(run.run_id)
+
+    stored = orchestrator.store.get(run.run_id)
+    assert stored is not None
+    assert stored.status.value == "completed"
+    assert stored.no_pass is False
+    evidence = orchestrator.artifacts.read_json(run.run_id, "evidence.json")
+    assessment = evidence["requirements"]["capability_assessment"]
+    assert assessment["status"] == "partial"
+    assert any("impact protection" in item for item in assessment["unsupported_requirements"])
+    assert evidence["outcome"] == "passed"
 
 
 async def test_part_pipeline_runs_the_model_program_and_passes(tmp_path: Path) -> None:

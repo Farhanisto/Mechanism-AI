@@ -391,6 +391,7 @@ class PartBrief(BaseModel):
     part: PartRequirements
     assumptions: list[str] = Field(default_factory=list)
     unknowns: list[str] = Field(default_factory=list)
+    unsupported_requirements: list[str] = Field(default_factory=list)
     clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
     requirement_sources: dict[str, RequirementSource] = Field(default_factory=dict)
 

@@ -171,14 +171,20 @@ The four-bar linkage is the hand-coded reference path. The `custom_part` capabil
 extension architecture the product is built for: **the model composes the design logic, engineering
 tools execute it, and the evaluator verifies the result.**
 
-1. **Requirements.** The model turns the request into a typed `PartBrief` (description plus a
-   bounding envelope) or reports honestly that the request is not a single static part. The same
-   deterministic honesty floor as the four-bar path asks about loads, temperatures and unmodelled
-   requirements.
-2. **Design program.** The model returns a `DesignProgram`: a CadQuery Python source that defines
+1. **Routing.** Prompts that match no specific capability keyword do not fail fast: when the Meta
+   model is configured they fall back to this capability, so the model decides whether the request
+   can be expressed as (simplified) solid geometry. Without a model the request is reported
+   unsupported.
+2. **Requirements.** The model turns the request into a typed `PartBrief`: one static solid, or a
+   simplified representative geometry for a larger product (for example a motorcycle-helmet
+   shell). It names exactly what geometry is produced and lists every omitted component,
+   mechanism and analysis in `unsupported_requirements`, which makes the capability status
+   **partial**. Safety-critical requests (helmets, protective gear, certification) pause for an
+   explicit confirmation that only geometric checks are performed.
+3. **Design program.** The model returns a `DesignProgram`: a CadQuery Python source that defines
    `build()` and returns a Workplane/Shape/Compound, plus declared parameters and the expected
    bounding box. The source is stored verbatim as an artifact (`program_XXX.py`) with its SHA-256.
-3. **Sandboxed execution.** The program runs in a separate, isolated subprocess
+4. **Sandboxed execution.** The program runs in a separate, isolated subprocess
    (`app/programs/bootstrap.py`):
    - isolated working directory, minimal environment (no API keys or secrets), `-I` isolated mode
    - import allowlist: `cadquery`, `math`, `numpy`, `typing` only
@@ -190,11 +196,11 @@ tools execute it, and the evaluator verifies the result.**
    This is a **best-effort sandbox, not a hardened OS boundary**: model code never runs in the API
    process, but production deployments should also run the API in a container without network
    access or credentials.
-4. **Independent evaluation.** Fixed checks in `app/evaluation/part_evaluator.py` judge the exported
+5. **Independent evaluation.** Fixed checks in `app/evaluation/part_evaluator.py` judge the exported
    mesh, not the program: program executed, mesh valid (closed volume), measured width/height/
    thickness within the requested envelope, deterministic (two runs produce the same mesh hash) and
    export size within budget. Thresholds live in code; model output cannot change them.
-5. **Bounded repair.** Failed checks and execution errors feed back into the next program attempt
+6. **Bounded repair.** Failed checks and execution errors feed back into the next program attempt
    (up to three). Exhausted budgets end as an honest `no_pass` with the failed checks named; the
    best attempt is reported.
 
