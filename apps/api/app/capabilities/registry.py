@@ -48,15 +48,18 @@ class CapabilityRegistry:
 
     def match_domain(self, prompt: str) -> CapabilityEntry | None:
         lowered = prompt.lower()
-        matches = [
-            entry
-            for entry in self.all()
-            if any(term.lower() in lowered for term in entry.domain_terms)
-        ]
-        for entry in matches:
-            if entry.is_selectable():
-                return entry
-        return matches[0] if matches else None
+        scored: list[tuple[int, CapabilityEntry]] = []
+        for entry in self.all():
+            score = sum(1 for term in entry.domain_terms if term.lower() in lowered)
+            if score:
+                scored.append((score, entry))
+        if not scored:
+            return None
+        scored.sort(key=lambda item: (-item[0], item[1].capability_id))
+        selectable = [entry for _, entry in scored if entry.is_selectable()]
+        if selectable:
+            return selectable[0]
+        return scored[0][1]
 
 
 FOUR_BAR_CAPABILITY = CapabilityEntry(
@@ -104,13 +107,64 @@ FOUR_BAR_CAPABILITY = CapabilityEntry(
 )
 
 
+CUSTOM_PART_CAPABILITY = CapabilityEntry(
+    capability_id="custom_part",
+    version="0.1.0",
+    domain="single static parametric part inside a bounding envelope",
+    input_schema="PartBrief",
+    output_schema="DesignProgram + GeometryArtifact (stl)",
+    units="mm",
+    parameter_constraints={
+        "envelope": "positive dimensions, at most 10000 mm",
+        "source": "CadQuery Python, 20000 characters maximum",
+    },
+    evaluation_checks=(
+        "program_executed",
+        "mesh_valid",
+        "envelope_width",
+        "envelope_height",
+        "envelope_thickness",
+        "determinism",
+        "size_within_budget",
+    ),
+    known_limitations=(
+        "Design programs run in a best-effort sandbox (import allowlist, curated builtins, "
+        "resource limits); it is not a hardened OS boundary.",
+        "Only static single-part geometry is verified; no strength, thermal or dynamic analysis.",
+        "Moving assemblies and multi-component products are not supported.",
+    ),
+    resource_limits={
+        "max_program_seconds": 15.0,
+        "max_export_bytes": 5_000_000.0,
+    },
+    test_status="tested",
+    domain_terms=(
+        "bracket",
+        "plate",
+        "clip",
+        "holder",
+        "adapter",
+        "fixture",
+        "spacer",
+        "flange",
+        "enclosure",
+        "housing",
+        "bushing",
+        "standoff",
+        "mounting plate",
+    ),
+)
+
+
 def default_registry() -> CapabilityRegistry:
     registry = CapabilityRegistry()
     registry.register(FOUR_BAR_CAPABILITY)
+    registry.register(CUSTOM_PART_CAPABILITY)
     return registry
 
 
 __all__ = [
+    "CUSTOM_PART_CAPABILITY",
     "CapabilityEntry",
     "CapabilityRegistry",
     "CapabilitySupport",

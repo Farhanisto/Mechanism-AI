@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 from collections import defaultdict
@@ -17,6 +18,8 @@ from app.ai.meta_client import (
     ModelCompletion,
     UnconfiguredMetaModelClient,
 )
+from app.ai.part_parser import parse_part_requirements
+from app.ai.program_parser import generate_program
 from app.ai.requirements_parser import default_brief_from_prompt, parse_requirements
 from app.cad.compiler import (
     COMPILER_VERSION as CAD_COMPILER_VERSION,
@@ -30,6 +33,7 @@ from app.capabilities.registry import CapabilityRegistry, default_registry
 from app.capabilities.router import route_request
 from app.evaluation.evaluator import EVALUATOR_VERSION, evaluate_candidate
 from app.evaluation.metrics import measure_simulation
+from app.evaluation.part_evaluator import PART_EVALUATOR_VERSION, evaluate_part
 from app.mechanism.kinematics import DEFAULT_SAMPLE_COUNT, KinematicsError
 from app.mechanism.schemas import (
     TERMINAL_EVENTS,
@@ -44,6 +48,8 @@ from app.mechanism.schemas import (
     EvidenceBundle,
     GeometryArtifact,
     NormalizedBrief,
+    PartBrief,
+    ProgramRecord,
     RequirementSource,
     RunEventName,
     RunStatus,
@@ -53,6 +59,14 @@ from app.mechanism.schemas import (
 )
 from app.persistence.artifacts import ArtifactStore
 from app.persistence.metadata import MetadataStore
+from app.programs.runner import (
+    DEFAULT_MAX_BYTES,
+    DEFAULT_TIMEOUT_SECONDS,
+    SANDBOX_VERSION,
+    ProgramExecution,
+    ProgramRejectedError,
+    run_design_program,
+)
 from app.simulation.mujoco_runner import SimulationNotAvailable
 from app.simulation.runner import ENGINE_AUTO, run_candidate_simulation
 
@@ -66,6 +80,12 @@ CLAIM_LIMITATIONS = [
     "Collision checks cover moving links only; contact with the frame is not modeled.",
     "Passing checks certify the implemented kinematic and geometric criteria only - not "
     "structural strength, fatigue safety, manufacturability or real-world safety.",
+]
+
+PART_CLAIM_LIMITATIONS = [
+    "Only the exported mesh is verified: envelope dimensions, closed volume, determinism and "
+    "export size. No structural, thermal, dynamic or manufacturing analysis is performed.",
+    "Model-authored design programs run in a best-effort sandbox, not a hardened OS boundary.",
 ]
 
 
@@ -226,33 +246,125 @@ class DesignRunOrchestrator:
         if missing:
             raise ValueError(f"Missing answers for: {sorted(missing)}")
 
-        stored = self.artifacts.read_json(run_id, "brief.json")
-        brief = NormalizedBrief.model_validate(stored["brief"])
-        try:
-            for question in run.pending_clarifications:
-                brief = self._apply_answer(brief, question, answers[question.question_id])
-        except UnsupportedRequirementError as exc:
-            self._fail(run, "UNSUPPORTED_REQUIREMENT", str(exc))
-            return self.store.get(run_id) or run
-
-        brief = brief.model_copy(
-            update={
-                "clarification_questions": [
-                    question
-                    for question in brief.clarification_questions
-                    if not question.blocking
-                ]
-            }
-        )
-        self.artifacts.write_json(
-            run_id,
-            "brief.json",
-            {"source": stored["source"], "brief": brief.model_dump(mode="json")},
-        )
+        if run.capability_id == "custom_part":
+            stored = self.artifacts.read_json(run_id, "part_brief.json")
+            part_brief = PartBrief.model_validate(stored["brief"])
+            try:
+                for question in run.pending_clarifications:
+                    part_brief = self._apply_part_answer(
+                        part_brief, question, answers[question.question_id]
+                    )
+            except UnsupportedRequirementError as exc:
+                self._fail(run, "UNSUPPORTED_REQUIREMENT", str(exc))
+                return self.store.get(run_id) or run
+            part_brief = part_brief.model_copy(
+                update={
+                    "clarification_questions": [
+                        question
+                        for question in part_brief.clarification_questions
+                        if not question.blocking
+                    ]
+                }
+            )
+            self.artifacts.write_json(
+                run_id,
+                "part_brief.json",
+                {
+                    "source": stored["source"],
+                    "brief": part_brief.model_dump(mode="json"),
+                },
+            )
+        else:
+            stored = self.artifacts.read_json(run_id, "brief.json")
+            brief = NormalizedBrief.model_validate(stored["brief"])
+            try:
+                for question in run.pending_clarifications:
+                    brief = self._apply_answer(
+                        brief, question, answers[question.question_id]
+                    )
+            except UnsupportedRequirementError as exc:
+                self._fail(run, "UNSUPPORTED_REQUIREMENT", str(exc))
+                return self.store.get(run_id) or run
+            brief = brief.model_copy(
+                update={
+                    "clarification_questions": [
+                        question
+                        for question in brief.clarification_questions
+                        if not question.blocking
+                    ]
+                }
+            )
+            self.artifacts.write_json(
+                run_id,
+                "brief.json",
+                {"source": stored["source"], "brief": brief.model_dump(mode="json")},
+            )
         run.clarification_answers.update(answers)
         run.pending_clarifications = []
         self._update_run(run)
         return run
+
+    @staticmethod
+    def _apply_part_answer(
+        brief: PartBrief,
+        question: ClarificationQuestion,
+        raw_answer: str,
+    ) -> PartBrief:
+        answer = raw_answer.strip()
+        if not answer:
+            raise ValueError("Clarification answers must not be empty")
+        field = question.field
+        sources = dict(brief.requirement_sources)
+        sources[field] = RequirementSource.USER_PROVIDED
+        unknowns = [unknown for unknown in brief.unknowns if unknown != field]
+
+        numeric_fields = {
+            "part.max_width_mm": "max_width_mm",
+            "part.max_height_mm": "max_height_mm",
+            "part.max_thickness_mm": "max_thickness_mm",
+        }
+        if field in numeric_fields:
+            try:
+                value = float(answer)
+            except ValueError as exc:
+                raise ValueError("Answer must be a number in millimetres") from exc
+            limit = 1_000.0 if field == "part.max_thickness_mm" else 10_000.0
+            if not 0.0 < value <= limit:
+                raise ValueError("Answer must be a positive value within the allowed range")
+            part = brief.part.model_copy(update={numeric_fields[field]: value})
+            return brief.model_copy(
+                update={"part": part, "requirement_sources": sources, "unknowns": unknowns}
+            )
+
+        if field == "verification_scope.kinematic_only":
+            normalized = answer.lower()
+            if normalized not in ("yes", "no"):
+                raise ValueError("Answer must be 'yes' or 'no'")
+            if normalized == "no":
+                raise UnsupportedRequirementError(
+                    "The answer needs engineering analyses the evaluator does not implement; "
+                    "the run stops honestly."
+                )
+            assumptions = list(brief.assumptions)
+            note = (
+                "User confirmed: geometric checks only; loading, thermal and dynamic "
+                "requirements are not evaluated."
+            )
+            if note not in assumptions:
+                assumptions.append(note)
+            return brief.model_copy(
+                update={
+                    "assumptions": assumptions,
+                    "requirement_sources": sources,
+                    "unknowns": unknowns,
+                }
+            )
+
+        assumptions = list(brief.assumptions)
+        assumptions.append(f"Clarification {question.question_id} answered: {answer}")
+        return brief.model_copy(
+            update={"assumptions": assumptions, "requirement_sources": sources}
+        )
 
     @staticmethod
     def _apply_answer(
@@ -400,6 +512,78 @@ class DesignRunOrchestrator:
             self._fail(run, "INTERNAL_ERROR", "The design run failed unexpectedly.")
 
     async def _run_pipeline(self, run: DesignRun, *, resuming: bool = False) -> None:
+        engine_info: dict[str, Any] = {
+            "name": "not_run",
+            "version": None,
+            "time_basis": "normalized_cycle",
+            "output_point": "rocker_pin",
+        }
+        if not resuming:
+            entry = self.capabilities.match_domain(run.original_prompt)
+            if entry is None:
+                assessment = route_request(
+                    run.original_prompt,
+                    None,
+                    clarification_answers={},
+                    registry=self.capabilities,
+                )
+                self._update_run(run, capability_id="none")
+                self._publish_capability_selected(run, assessment)
+                self._complete_without_candidates(run, None, "none", assessment, engine_info)
+                return
+            run.capability_id = entry.capability_id
+            self._update_run(run)
+            if not entry.is_selectable():
+                assessment = CapabilityAssessment(
+                    capability_id=entry.capability_id,
+                    capability_version=entry.version,
+                    status=CapabilitySupport.NOT_SUPPORTED,
+                    unsupported_requirements=[
+                        f"{entry.capability_id} is not validated (test status: {entry.test_status})"
+                    ],
+                )
+                self._publish_capability_selected(run, assessment)
+                self._complete_without_candidates(run, None, "none", assessment, engine_info)
+                return
+            if entry.capability_id == "custom_part" and not self.meta_client.is_configured:
+                assessment = CapabilityAssessment(
+                    capability_id=entry.capability_id,
+                    capability_version=entry.version,
+                    status=CapabilitySupport.NOT_SUPPORTED,
+                    unsupported_requirements=[
+                        "model-authored design programs require a configured Meta model "
+                        "(set MECHANISM_AI_META_API_KEY)"
+                    ],
+                )
+                self._publish_capability_selected(run, assessment)
+                self._complete_without_candidates(
+                    run, None, "deterministic_fallback", assessment, engine_info
+                )
+                return
+
+        if run.capability_id == "custom_part":
+            await self._run_part_pipeline(run, resuming=resuming, engine_info=engine_info)
+        else:
+            await self._run_four_bar_pipeline(run, resuming=resuming)
+
+    def _publish_capability_selected(
+        self, run: DesignRun, assessment: CapabilityAssessment
+    ) -> None:
+        self.events.publish(
+            run.run_id,
+            RunEventName.CAPABILITY_SELECTED.value,
+            {
+                "capability_id": assessment.capability_id,
+                "capability_version": assessment.capability_version,
+                "status": assessment.status.value,
+                "unsupported_requirements": assessment.unsupported_requirements,
+                "unavailable_checks": assessment.unavailable_checks,
+            },
+        )
+
+    async def _run_four_bar_pipeline(
+        self, run: DesignRun, *, resuming: bool = False
+    ) -> None:
         provider_calls: list[dict[str, Any]] = []
         engine_info: dict[str, Any] = {
             "name": "not_run",
@@ -637,7 +821,7 @@ class DesignRunOrchestrator:
             prompt=run.original_prompt,
             requirements={
                 "source": source,
-                "brief": brief.model_dump(mode="json"),
+                **({"brief": brief.model_dump(mode="json")} if brief is not None else {}),
                 "capability_assessment": assessment.model_dump(mode="json"),
             },
             simulation_engine=SimulationEngineInfo(**engine_info),
@@ -647,7 +831,7 @@ class DesignRunOrchestrator:
                 "simulation_sample_count": DEFAULT_SAMPLE_COUNT,
                 **self.limits,
             },
-            collision_model="moving_links_only_zero_thickness",
+            collision_model="not_applicable",
             evaluator_version=EVALUATOR_VERSION,
             provider_calls=provider_calls,
             candidates=records,
@@ -685,10 +869,339 @@ class DesignRunOrchestrator:
             },
         )
 
+    async def _run_part_pipeline(
+        self, run: DesignRun, *, resuming: bool, engine_info: dict[str, Any]
+    ) -> None:
+        provider_calls: list[dict[str, Any]] = []
+        source = "meta_model"
+        capability = self.capabilities.get("custom_part")
+        capability_version = capability.version if capability is not None else "0.1.0"
+
+        if resuming:
+            stored = self.artifacts.read_json(run.run_id, "part_brief.json") or {}
+            source = stored.get("source", source)
+            brief = PartBrief.model_validate(stored["brief"])
+        else:
+            result = await parse_part_requirements(
+                run.original_prompt, client=self.meta_client
+            )
+            self._record_completion(provider_calls, "requirements", result.completion)
+            if result.brief is None:
+                assessment = CapabilityAssessment(
+                    capability_id="custom_part",
+                    capability_version=capability_version,
+                    status=CapabilitySupport.NOT_SUPPORTED,
+                    unsupported_requirements=[
+                        result.reason or "the request is not a single static part"
+                    ],
+                )
+                self.artifacts.write_json(
+                    run.run_id,
+                    "part_brief.json",
+                    {"source": source, "supported": False, "reason": result.reason},
+                )
+                self.events.publish(
+                    run.run_id,
+                    RunEventName.REQUIREMENTS_READY.value,
+                    {
+                        "source": source,
+                        "capability": "custom_part",
+                        "supported": False,
+                        "reason": result.reason,
+                    },
+                )
+                self._publish_capability_selected(run, assessment)
+                self._complete_without_candidates(
+                    run, None, source, assessment, engine_info
+                )
+                return
+            brief = result.brief
+            self.artifacts.write_json(
+                run.run_id,
+                "part_brief.json",
+                {"source": source, "brief": brief.model_dump(mode="json")},
+            )
+
+        self.events.publish(
+            run.run_id,
+            RunEventName.REQUIREMENTS_READY.value,
+            {
+                "source": source,
+                "capability": "custom_part",
+                "part": brief.part.model_dump(mode="json"),
+                "assumptions": brief.assumptions,
+                "unknowns": brief.unknowns,
+                "requirement_sources": {
+                    field: requirement.value
+                    for field, requirement in brief.requirement_sources.items()
+                },
+                "clarifications": run.clarification_answers,
+            },
+        )
+        blocking = [
+            question for question in brief.clarification_questions if question.blocking
+        ]
+        if blocking:
+            run.pending_clarifications = blocking
+            self._update_run(run, status=RunStatus.AWAITING_CLARIFICATION)
+            self.events.publish(
+                run.run_id,
+                RunEventName.CLARIFICATION_REQUIRED.value,
+                {
+                    "questions": [
+                        question.model_dump(mode="json") for question in blocking
+                    ],
+                },
+            )
+            return
+        self._check_cancel(run)
+
+        assessment = route_request(
+            run.original_prompt,
+            None,
+            clarification_answers=run.clarification_answers,
+            registry=self.capabilities,
+        ).model_copy(
+            update={
+                "capability_id": "custom_part",
+                "capability_version": capability_version,
+            }
+        )
+        self._publish_capability_selected(run, assessment)
+
+        programs: list[ProgramRecord] = []
+        geometry_artifacts: list[GeometryArtifact] = []
+        previous_feedback: str | None = None
+        passed_record: ProgramRecord | None = None
+
+        for attempt in range(1, run.max_candidates + 1):
+            self._check_cancel(run)
+            self._update_run(run, stage=Stage.GENERATE_CANDIDATE)
+            program, completion = await generate_program(
+                brief,
+                client=self.meta_client,
+                attempt_number=attempt,
+                max_attempts=run.max_candidates,
+                previous_feedback=previous_feedback,
+            )
+            self._record_completion(provider_calls, f"program_{attempt:03d}", completion)
+            source_hash = hashlib.sha256(program.source.encode("utf-8")).hexdigest()
+            source_artifact = f"program_{attempt:03d}.py"
+            self.artifacts.write_bytes(
+                run.run_id, source_artifact, program.source.encode("utf-8")
+            )
+            self.events.publish(
+                run.run_id,
+                RunEventName.CANDIDATE_GENERATED.value,
+                {
+                    "candidate_id": program.program_id,
+                    "attempt_number": attempt,
+                    "capability": "custom_part",
+                    "source_artifact": source_artifact,
+                    "source_hash": source_hash,
+                    "declared_parameters": {
+                        item.name: item.value for item in program.declared_parameters
+                    },
+                    "expected_bbox": program.expected_bbox.model_dump(mode="json"),
+                },
+            )
+
+            self._update_run(run, stage=Stage.COMPILE_MODEL)
+            execution: ProgramExecution | None
+            rejection: str | None = None
+            try:
+                execution = run_design_program(program)
+            except ProgramRejectedError as exc:
+                execution = None
+                rejection = str(exc)
+
+            deterministic: bool | None = None
+            artifact_id: str | None = None
+            artifact_hash: str | None = None
+            if execution is not None and execution.status == "executed":
+                second = run_design_program(program)
+                deterministic = (
+                    second.status == "executed" and second.sha256 == execution.sha256
+                )
+                artifact_id = f"geometry_program_{attempt:03d}.stl"
+                if execution.stl is not None:
+                    self.artifacts.write_bytes(run.run_id, artifact_id, execution.stl)
+                artifact_hash = execution.sha256
+                geometry_artifacts.append(
+                    GeometryArtifact(
+                        artifact_id=artifact_id,
+                        format="stl",
+                        units=Units.MM,
+                        compiler_version=f"program-sandbox {SANDBOX_VERSION}",
+                        generation_status="generated",
+                        validation_results={
+                            "deterministic": deterministic,
+                            "mesh_valid": execution.stats is not None,
+                        },
+                        artifact_hash=artifact_hash,
+                    )
+                )
+                self.events.publish(
+                    run.run_id,
+                    RunEventName.GEOMETRY_VALIDATED.value,
+                    {
+                        "candidate_id": program.program_id,
+                        "artifact_id": artifact_id,
+                        "format": "stl",
+                        "artifact_hash": artifact_hash,
+                        "generation_status": "generated",
+                        "deterministic": deterministic,
+                    },
+                )
+
+            self._update_run(run, stage=Stage.EVALUATE)
+            evaluation = evaluate_part(
+                brief,
+                execution,
+                program_id=program.program_id,
+                deterministic=deterministic,
+            )
+            if rejection is not None:
+                evaluation = evaluation.model_copy(
+                    update={
+                        "diagnostic_notes": [
+                            f"Program rejected before execution: {rejection}",
+                            *evaluation.diagnostic_notes,
+                        ]
+                    }
+                )
+            record = ProgramRecord(
+                program=program,
+                attempt_number=attempt,
+                source_hash=source_hash,
+                geometry_artifact_id=artifact_id,
+                artifact_hash=artifact_hash,
+                execution_status=execution.status if execution is not None else "rejected",
+                duration_ms=execution.duration_ms if execution is not None else None,
+                error=rejection or (execution.error if execution is not None else None),
+                evaluation=evaluation,
+            )
+            programs.append(record)
+            self.artifacts.write_json(
+                run.run_id,
+                "programs.json",
+                [item.model_dump(mode="json") for item in programs],
+            )
+            self.events.publish(
+                run.run_id,
+                RunEventName.EVALUATION_COMPLETED.value,
+                {
+                    "candidate_id": program.program_id,
+                    "status": evaluation.status.value,
+                    "failed_checks": evaluation.failed_checks,
+                },
+            )
+            if evaluation.status is EvaluationStatus.PASSED:
+                passed_record = record
+                break
+            if attempt < run.max_candidates:
+                self._update_run(run, stage=Stage.REPAIR)
+                feedback_lines: list[str] = []
+                if rejection is not None:
+                    feedback_lines.append(f"Program rejected before execution: {rejection}")
+                elif execution is not None and execution.error:
+                    feedback_lines.append(f"Execution error: {execution.error}")
+                feedback_lines.extend(evaluation.diagnostic_notes)
+                feedback_lines.append(
+                    "Failed checks: " + ", ".join(evaluation.failed_checks)
+                )
+                previous_feedback = "\n".join(feedback_lines)
+                self.events.publish(
+                    run.run_id,
+                    RunEventName.REPAIR_STARTED.value,
+                    {
+                        "candidate_id": program.program_id,
+                        "next_attempt": attempt + 1,
+                        "failed_checks": evaluation.failed_checks,
+                    },
+                )
+
+        if not programs:
+            raise RuntimeError("The pipeline produced no program to evaluate.")
+        final_record = passed_record or min(
+            programs,
+            key=lambda item: (
+                len(item.evaluation.failed_checks) if item.evaluation else 99,
+                len(item.evaluation.diagnostic_notes) if item.evaluation else 99,
+            ),
+        )
+        no_pass = final_record.evaluation is None or (
+            final_record.evaluation.status is not EvaluationStatus.PASSED
+        )
+        no_pass = no_pass or bool(assessment.unavailable_checks)
+
+        self._update_run(run, stage=Stage.REPORT)
+        self._update_run(
+            run,
+            status=RunStatus.COMPLETED,
+            stage=Stage.COMPLETED,
+            final_candidate_id=final_record.program.program_id,
+            no_pass=no_pass,
+        )
+        bundle = EvidenceBundle(
+            run=run,
+            prompt=run.original_prompt,
+            requirements={
+                "source": source,
+                "brief": brief.model_dump(mode="json"),
+                "capability_assessment": assessment.model_dump(mode="json"),
+            },
+            simulation_engine=SimulationEngineInfo(**engine_info),
+            limits={
+                "max_candidates": run.max_candidates,
+                "max_run_seconds": self.max_run_seconds,
+                "program_timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
+                "program_max_bytes": DEFAULT_MAX_BYTES,
+                **self.limits,
+            },
+            collision_model="not_applicable_static_part",
+            evaluator_version=PART_EVALUATOR_VERSION,
+            provider_calls=provider_calls,
+            candidates=[],
+            programs=programs,
+            final_candidate_id=final_record.program.program_id,
+            no_pass=no_pass,
+            outcome="no_pass" if no_pass else "passed",
+            limitations=PART_CLAIM_LIMITATIONS,
+            manifest=self.artifacts.manifest(run.run_id),
+            geometry_artifacts=geometry_artifacts,
+        )
+        self.artifacts.write_json(run.run_id, "evidence.json", bundle)
+        self.events.publish(
+            run.run_id,
+            RunEventName.ARTIFACT_READY.value,
+            {
+                "artifacts": [entry.name for entry in bundle.manifest]
+                + ["evidence.json"],
+            },
+        )
+        self.events.publish(
+            run.run_id,
+            RunEventName.RUN_COMPLETED.value,
+            {
+                "status": "no_pass" if no_pass else "passed",
+                "stage": run.stage.value,
+                "final_candidate_id": final_record.program.program_id,
+                "failed_checks": (
+                    final_record.evaluation.failed_checks
+                    if final_record.evaluation is not None
+                    else []
+                ),
+                "capability_status": assessment.status.value,
+                "unavailable_checks": assessment.unavailable_checks,
+                "no_pass": no_pass,
+            },
+        )
+
     def _complete_without_candidates(
         self,
         run: DesignRun,
-        brief: NormalizedBrief,
+        brief: NormalizedBrief | None,
         source: str,
         assessment: CapabilityAssessment,
         engine_info: dict[str, Any],
@@ -707,7 +1220,7 @@ class DesignRunOrchestrator:
             prompt=run.original_prompt,
             requirements={
                 "source": source,
-                "brief": brief.model_dump(mode="json"),
+                **({"brief": brief.model_dump(mode="json")} if brief is not None else {}),
                 "capability_assessment": assessment.model_dump(mode="json"),
             },
             simulation_engine=SimulationEngineInfo(**engine_info),
@@ -717,7 +1230,7 @@ class DesignRunOrchestrator:
                 "simulation_sample_count": DEFAULT_SAMPLE_COUNT,
                 **self.limits,
             },
-            collision_model="moving_links_only_zero_thickness",
+            collision_model="not_applicable",
             evaluator_version=EVALUATOR_VERSION,
             candidates=[],
             final_candidate_id=None,
@@ -829,11 +1342,14 @@ class DesignRunOrchestrator:
         error_code: str | None = None,
         final_candidate_id: str | None = None,
         no_pass: bool | None = None,
+        capability_id: str | None = None,
     ) -> DesignRun:
         if status is not None:
             run.status = status
         if stage is not None:
             run.stage = stage
+        if capability_id is not None:
+            run.capability_id = capability_id
         if error_code is not None:
             run.error_code = error_code
         if final_candidate_id is not None:
@@ -925,6 +1441,21 @@ def render_evidence_report(
         ),
         candidates[-1] if candidates else None,
     )
+    if bundle is not None and bundle.programs:
+        for record in bundle.programs:
+            status = (
+                record.evaluation.status.value
+                if record.evaluation is not None
+                else "not evaluated"
+            )
+            lines.append(
+                f"Program {record.program.program_id} (attempt {record.attempt_number}): "
+                f"{record.execution_status} - {status}"
+            )
+            if record.evaluation is not None and record.evaluation.failed_checks:
+                lines.append(
+                    "  Failed checks: " + ", ".join(record.evaluation.failed_checks)
+                )
     if final is not None and final.evaluation is not None:
         evaluation = final.evaluation
         lines.append(

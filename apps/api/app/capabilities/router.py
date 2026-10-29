@@ -37,8 +37,9 @@ def detected_demand_categories(prompt: str) -> list[str]:
 
 def route_request(
     prompt: str,
-    brief: NormalizedBrief,
+    brief: NormalizedBrief | None = None,
     *,
+    requested_checks: tuple[str, ...] = (),
     clarification_answers: dict[str, str],
     registry: CapabilityRegistry | None = None,
 ) -> CapabilityAssessment:
@@ -69,7 +70,11 @@ def route_request(
         else:
             unavailable_checks.append(check)
 
-    for key in [*brief.requested_checks, *brief.evaluator_config]:
+    required_checks = list(requested_checks)
+    if brief is not None:
+        required_checks.extend(brief.requested_checks)
+        required_checks.extend(brief.evaluator_config)
+    for key in dict.fromkeys(required_checks):
         if key not in entry.evaluation_checks:
             unavailable_checks.append(key)
 

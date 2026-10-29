@@ -35,6 +35,9 @@ Working today:
   with SHA-256 artifact hashes, timestamps and SQLite metadata for reconstruction
 - Parametric CAD: deterministic CadQuery/OpenCascade link-set compiler producing validated STL
   geometry artifacts with SHA-256 hashes (optional `cad` extra)
+- Model-authored design programs: the Meta model composes a `custom_part` design as CadQuery
+  code, a sandbox executes it, and an independent evaluator verifies the exported mesh - the
+  first capability that goes beyond the hand-coded four-bar path
 - Three-panel React + TypeScript + Vite workspace with an interactive Three.js CAD viewport (from the
   persisted STL artifact), motion preview from computed traces, an explicit concept/unavailable
   mode, Beginner/Expert views, validation report, candidate history and artifact downloads
@@ -110,9 +113,11 @@ All server settings use the `MECHANISM_AI_` prefix (see `.env.example`):
 | `MECHANISM_AI_API_PORT` | `8000` | Docker host port for the API |
 | `MECHANISM_AI_WEB_PORT` | `5173` | Docker host port for the web app |
 
-API keys stay on the server. Model output is treated as untrusted data and validated with
-Pydantic; it is never executed. The default `minimal` reasoning effort keeps the demo within the
-60-second target; raise it for harder briefs at the cost of latency.
+API keys stay on the server. Structured model output is treated as untrusted data and validated
+with Pydantic. For the `custom_part` capability the model writes CadQuery code, which runs only
+inside the program sandbox described below - never in the API process and never as shell. The
+default `minimal` reasoning effort keeps the demo within the 60-second target; raise it for
+harder briefs at the cost of latency.
 
 ## Simulation engines
 
@@ -159,6 +164,44 @@ deferred until a determinism and round-trip strategy for its timestamped header 
   `model/stl`); the `geometry_validated` event reports each candidate's artifact and hash.
 - Limitations: the link set is a planar four-bar with rectangular bars and pin holes; no fillets,
   threads, fasteners, obstacles or frame contact are modeled.
+
+## Model-authored design programs
+
+The four-bar linkage is the hand-coded reference path. The `custom_part` capability shows the
+extension architecture the product is built for: **the model composes the design logic, engineering
+tools execute it, and the evaluator verifies the result.**
+
+1. **Requirements.** The model turns the request into a typed `PartBrief` (description plus a
+   bounding envelope) or reports honestly that the request is not a single static part. The same
+   deterministic honesty floor as the four-bar path asks about loads, temperatures and unmodelled
+   requirements.
+2. **Design program.** The model returns a `DesignProgram`: a CadQuery Python source that defines
+   `build()` and returns a Workplane/Shape/Compound, plus declared parameters and the expected
+   bounding box. The source is stored verbatim as an artifact (`program_XXX.py`) with its SHA-256.
+3. **Sandboxed execution.** The program runs in a separate, isolated subprocess
+   (`app/programs/bootstrap.py`):
+   - isolated working directory, minimal environment (no API keys or secrets), `-I` isolated mode
+   - import allowlist: `cadquery`, `math`, `numpy`, `typing` only
+   - curated builtins (no `open`, `eval`, `exec`, `compile`, attribute dunders), plus static
+     rejection of forbidden constructs before execution
+   - CPU, file-size and wall-clock limits; memory limits where the platform permits
+   - fixed tessellation tolerances so identical programs produce identical STL bytes
+
+   This is a **best-effort sandbox, not a hardened OS boundary**: model code never runs in the API
+   process, but production deployments should also run the API in a container without network
+   access or credentials.
+4. **Independent evaluation.** Fixed checks in `app/evaluation/part_evaluator.py` judge the exported
+   mesh, not the program: program executed, mesh valid (closed volume), measured width/height/
+   thickness within the requested envelope, deterministic (two runs produce the same mesh hash) and
+   export size within budget. Thresholds live in code; model output cannot change them.
+5. **Bounded repair.** Failed checks and execution errors feed back into the next program attempt
+   (up to three). Exhausted budgets end as an honest `no_pass` with the failed checks named; the
+   best attempt is reported.
+
+Artifacts per attempt: the program source, the STL mesh and `programs.json`; hashes appear in the
+evidence bundle and SQLite metadata. The CAD tab renders the accepted mesh, and the UI labels
+everything as verified artifact, computed trace or unavailable. Without a configured Meta model the
+capability reports itself unsupported instead of pretending.
 
 ## API
 
@@ -253,8 +296,10 @@ part of the extension work tracked in issues #8-#14 and is not demoable yet.
 
 ## Honest claims
 
-A result from this system can only claim that a candidate passed the implemented kinematic and
-geometric checks under the saved configuration. Simulation runs on the deterministic reference
+A result from this system can only claim that a candidate passed the implemented kinematic,
+geometric and mesh checks under the saved configuration. Model-authored design programs are
+executed in a best-effort sandbox and only their exported mesh is verified; no check proves the
+program is safe, correct beyond the measured mesh, or free of side effects. Simulation runs on the deterministic reference
 solver or on MuJoCo's closed-loop solver (each result is labelled with its engine and settings),
 but links are zero-thickness line segments, the ground link is a fixed frame, contact with the
 frame is not modeled, and the output point is the rocker pin. It cannot claim structural strength,

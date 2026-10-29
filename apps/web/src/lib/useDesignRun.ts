@@ -11,6 +11,8 @@ import {
   type BriefArtifact,
   type CandidateRecord,
   type DesignRun,
+  type PartBriefArtifact,
+  type ProgramRecord,
   type RunEvent,
   type SimulationResult,
   type StreamStatus,
@@ -31,6 +33,8 @@ export interface DesignRunState {
   events: RunEvent[];
   candidates: CandidateRecord[];
   briefArtifact: BriefArtifact | null;
+  partBrief: PartBriefArtifact | null;
+  programs: ProgramRecord[];
   simulation: SimulationResult | null;
   isStarting: boolean;
   streamState: RunStreamState;
@@ -45,6 +49,8 @@ export function useDesignRun(): DesignRunState {
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [candidates, setCandidates] = useState<CandidateRecord[]>([]);
   const [briefArtifact, setBriefArtifact] = useState<BriefArtifact | null>(null);
+  const [partBrief, setPartBrief] = useState<PartBriefArtifact | null>(null);
+  const [programs, setPrograms] = useState<ProgramRecord[]>([]);
   const [simulation, setSimulation] = useState<SimulationResult | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [streamState, setStreamState] = useState<RunStreamState>("idle");
@@ -78,19 +84,24 @@ export function useDesignRun(): DesignRunState {
       setRun(latestRun);
       setCandidates(latestCandidates);
 
-      const [latestBrief, latestSimulation] = await Promise.all([
-        getArtifact<BriefArtifact>(runId, "brief.json").catch(() => null),
-        latestRun.final_candidate_id
-          ? getArtifact<SimulationResult>(
-              runId,
-              `simulation_${latestRun.final_candidate_id}.json`,
-            ).catch(() => null)
-          : Promise.resolve(null),
-      ]);
+      const [latestBrief, latestPartBrief, latestPrograms, latestSimulation] =
+        await Promise.all([
+          getArtifact<BriefArtifact>(runId, "brief.json").catch(() => null),
+          getArtifact<PartBriefArtifact>(runId, "part_brief.json").catch(() => null),
+          getArtifact<ProgramRecord[]>(runId, "programs.json").catch(() => null),
+          latestRun.final_candidate_id
+            ? getArtifact<SimulationResult>(
+                runId,
+                `simulation_${latestRun.final_candidate_id}.json`,
+              ).catch(() => null)
+            : Promise.resolve(null),
+        ]);
       if (seq !== refreshSeqRef.current) {
         return;
       }
       setBriefArtifact(latestBrief);
+      setPartBrief(latestPartBrief);
+      setPrograms(latestPrograms ?? []);
       setSimulation(latestSimulation);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to refresh the design run.");
@@ -105,6 +116,8 @@ export function useDesignRun(): DesignRunState {
       setEvents([]);
       setCandidates([]);
       setBriefArtifact(null);
+      setPartBrief(null);
+      setPrograms([]);
       setSimulation(null);
       setRun(null);
       updateStreamState("idle");
@@ -187,6 +200,8 @@ export function useDesignRun(): DesignRunState {
     events,
     candidates,
     briefArtifact,
+    partBrief,
+    programs,
     simulation,
     isStarting,
     streamState,

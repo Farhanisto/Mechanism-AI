@@ -243,6 +243,7 @@ class DesignRun(BaseModel):
     final_candidate_id: str | None = None
     max_candidates: int = Field(default=3, ge=1, le=3)
     no_pass: bool = False
+    capability_id: str | None = None
     pending_clarifications: list[ClarificationQuestion] = Field(default_factory=list)
     clarification_answers: dict[str, str] = Field(default_factory=dict)
 
@@ -374,6 +375,92 @@ class SimulationEngineInfo(BaseModel):
     settings: dict[str, Any] | None = None
 
 
+class PartRequirements(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    description: str = Field(min_length=1, max_length=2000)
+    max_width_mm: float = Field(gt=0, le=10_000)
+    max_height_mm: float = Field(gt=0, le=10_000)
+    max_thickness_mm: float = Field(gt=0, le=1_000)
+    notes: list[str] = Field(default_factory=list)
+
+
+class PartBrief(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    part: PartRequirements
+    assumptions: list[str] = Field(default_factory=list)
+    unknowns: list[str] = Field(default_factory=list)
+    clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
+    requirement_sources: dict[str, RequirementSource] = Field(default_factory=dict)
+
+
+class ExpectedBoundingBox(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    width_mm: float = Field(gt=0, le=10_000)
+    height_mm: float = Field(gt=0, le=10_000)
+    thickness_mm: float = Field(gt=0, le=1_000)
+
+
+class DeclaredParameter(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=64)
+    value: float
+
+
+class DesignProgram(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    program_id: str
+    capability_id: str = "custom_part"
+    language: Literal["python"] = "python"
+    entrypoint: Literal["build"] = "build"
+    source: str = Field(min_length=1, max_length=20_000)
+    declared_parameters: list[DeclaredParameter] = Field(default_factory=list)
+    expected_bbox: ExpectedBoundingBox
+    notes: list[str] = Field(default_factory=list)
+
+
+class PartMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    width_mm: float = Field(ge=0)
+    height_mm: float = Field(ge=0)
+    thickness_mm: float = Field(ge=0)
+    volume_mm3: float
+    triangle_count: int = Field(ge=0)
+    deterministic: bool
+    mesh_valid: bool
+    program_status: str
+
+
+class PartEvaluation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    program_id: str
+    status: EvaluationStatus
+    metrics: PartMetrics
+    failed_checks: list[str] = Field(default_factory=list)
+    evaluator_version: str
+    diagnostic_notes: list[str] = Field(default_factory=list)
+
+
+class ProgramRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    program: DesignProgram
+    attempt_number: int = Field(ge=1, le=10)
+    source_hash: str
+    geometry_artifact_id: str | None = None
+    artifact_hash: str | None = None
+    execution_status: str
+    duration_ms: float | None = None
+    error: str | None = None
+    evaluation: PartEvaluation | None = None
+
+
 class EvidenceBundle(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -392,3 +479,4 @@ class EvidenceBundle(BaseModel):
     limitations: list[str] = Field(default_factory=list)
     manifest: list[ArtifactManifestEntry] = Field(default_factory=list)
     geometry_artifacts: list[GeometryArtifact] = Field(default_factory=list)
+    programs: list[ProgramRecord] = Field(default_factory=list)

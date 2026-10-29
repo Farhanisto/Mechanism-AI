@@ -39,14 +39,14 @@ const brief: BriefArtifact = {
 
 describe("Beginner and Expert views", () => {
   it("hides requirement provenance in beginner mode", () => {
-    render(<RequirementsPanel briefArtifact={brief} expert={false} />);
+    render(<RequirementsPanel briefArtifact={brief} partBrief={null} expert={false} />);
 
     expect(screen.queryByText("Requirement provenance")).toBeNull();
     expect(screen.getByText(/Capability:/)).toBeTruthy();
   });
 
   it("shows requirement provenance in expert mode", () => {
-    render(<RequirementsPanel briefArtifact={brief} expert />);
+    render(<RequirementsPanel briefArtifact={brief} partBrief={null} expert />);
 
     expect(screen.getByText("Requirement provenance")).toBeTruthy();
   });

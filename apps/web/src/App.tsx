@@ -5,6 +5,7 @@ import { CandidateHistory } from "./features/candidate-history/CandidateHistory"
 import { ClarificationForm } from "./features/clarifications/ClarificationForm";
 import { DesignInputForm } from "./features/design-input/DesignInputForm";
 import { EvidenceArtifacts } from "./features/evidence/EvidenceArtifacts";
+import { ProgramsPanel } from "./features/programs/ProgramsPanel";
 import { RequirementsPanel } from "./features/requirements/RequirementsPanel";
 import { ValidationReport } from "./features/validation-report/ValidationReport";
 import { Workspace3D } from "./features/workspace/Workspace3D";
@@ -17,6 +18,8 @@ export function App() {
     events,
     candidates,
     briefArtifact,
+    partBrief,
+    programs,
     simulation,
     isStarting,
     streamState,
@@ -34,7 +37,14 @@ export function App() {
         )
       : null) ?? candidates.at(-1);
   const metrics = finalRecord?.evaluation?.metrics ?? null;
-  const geometryArtifactId = finalRecord?.candidate.geometry_artifact_id ?? null;
+  const bestProgram =
+    programs.find((record) => record.evaluation?.status === "passed") ??
+    programs.at(-1) ??
+    null;
+  const geometryArtifactId =
+    finalRecord?.candidate.geometry_artifact_id ??
+    bestProgram?.geometry_artifact_id ??
+    null;
   const geometryUrl =
     run && geometryArtifactId ? artifactUrl(run.run_id, geometryArtifactId) : null;
 
@@ -83,7 +93,11 @@ export function App() {
               onSubmit={(answers) => void answerClarifications(answers)}
             />
           ) : null}
-          <RequirementsPanel briefArtifact={briefArtifact} expert={expert} />
+          <RequirementsPanel
+            briefArtifact={briefArtifact}
+            partBrief={partBrief}
+            expert={expert}
+          />
         </div>
 
         <div className="workspace-column workspace-column-center">
@@ -111,6 +125,7 @@ export function App() {
             expert={expert}
           />
           <CandidateHistory candidates={candidates} />
+          <ProgramsPanel runId={run?.run_id ?? null} programs={programs} expert={expert} />
           <EvidenceArtifacts run={run} candidates={candidates} expert={expert} />
         </div>
       </div>

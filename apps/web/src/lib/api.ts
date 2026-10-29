@@ -143,6 +143,69 @@ export interface SimulationResult {
   diagnostics?: SimulationDiagnostics | null;
 }
 
+
+export interface PartRequirements {
+  description: string;
+  max_width_mm: number;
+  max_height_mm: number;
+  max_thickness_mm: number;
+  notes: string[];
+}
+
+export interface PartBriefArtifact {
+  source: string;
+  supported?: boolean;
+  reason?: string | null;
+  brief?: {
+    part: PartRequirements;
+    assumptions: string[];
+    unknowns: string[];
+    requirement_sources?: Record<string, string>;
+    clarification_questions?: ClarificationQuestion[];
+  };
+}
+
+export interface PartMetrics {
+  width_mm: number;
+  height_mm: number;
+  thickness_mm: number;
+  volume_mm3: number;
+  triangle_count: number;
+  deterministic: boolean;
+  mesh_valid: boolean;
+  program_status: string;
+}
+
+export interface PartEvaluation {
+  program_id: string;
+  status: "passed" | "failed" | "error";
+  metrics: PartMetrics;
+  failed_checks: string[];
+  evaluator_version: string;
+  diagnostic_notes: string[];
+}
+
+export interface ProgramRecord {
+  program: {
+    program_id: string;
+    capability_id: string;
+    language: string;
+    entrypoint: string;
+    source: string;
+    declared_parameters: { name: string; value: number }[];
+    expected_bbox: { width_mm: number; height_mm: number; thickness_mm: number };
+    notes: string[];
+  };
+  attempt_number: number;
+  source_hash: string;
+  geometry_artifact_id: string | null;
+  artifact_hash: string | null;
+  execution_status: string;
+  duration_ms: number | null;
+  error: string | null;
+  evaluation: PartEvaluation | null;
+}
+
 export interface BriefArtifact {
   source: "meta_model" | "deterministic_fallback";
   brief: {

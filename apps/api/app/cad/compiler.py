@@ -139,15 +139,42 @@ def _validate_plan(plan: DesignPlan) -> None:
             )
 
 
-def _mesh_stats(data: bytes) -> tuple[int, tuple[float, float, float, float], float]:
+@dataclass(frozen=True)
+class MeshStats:
+    triangle_count: int
+    min_x: float
+    min_y: float
+    min_z: float
+    max_x: float
+    max_y: float
+    max_z: float
+    volume_mm3: float
+
+    @property
+    def width_mm(self) -> float:
+        return self.max_x - self.min_x
+
+    @property
+    def height_mm(self) -> float:
+        return self.max_y - self.min_y
+
+    @property
+    def thickness_mm(self) -> float:
+        return self.max_z - self.min_z
+
+
+def mesh_stats(data: bytes) -> MeshStats:
+    """Parse a binary STL and return bounds, volume and triangle count."""
     if len(data) < 84:
         raise InvalidPlanError("the exported mesh is empty")
     triangle_count = struct.unpack_from("<I", data, 80)[0]
     if len(data) != 84 + triangle_count * 50:
         raise InvalidPlanError("the exported mesh is malformed")
+    if triangle_count == 0:
+        raise InvalidPlanError("the exported mesh is empty")
 
-    min_x = min_y = math.inf
-    max_x = max_y = -math.inf
+    min_x = min_y = min_z = math.inf
+    max_x = max_y = max_z = -math.inf
     volume = 0.0
     for index in range(triangle_count):
         offset = 84 + index * 50 + 12
@@ -157,12 +184,22 @@ def _mesh_stats(data: bytes) -> tuple[int, tuple[float, float, float, float], fl
         x2, y2, z2 = vertices[6], vertices[7], vertices[8]
         min_x, max_x = min(min_x, x0, x1, x2), max(max_x, x0, x1, x2)
         min_y, max_y = min(min_y, y0, y1, y2), max(max_y, y0, y1, y2)
+        min_z, max_z = min(min_z, z0, z1, z2), max(max_z, z0, z1, z2)
         volume += (
             x0 * (y1 * z2 - z1 * y2)
             - y0 * (x1 * z2 - z1 * x2)
             + z0 * (x1 * y2 - y1 * x2)
         ) / 6.0
-    return triangle_count, (min_x, min_y, max_x, max_y), volume
+    return MeshStats(
+        triangle_count=triangle_count,
+        min_x=min_x,
+        min_y=min_y,
+        min_z=min_z,
+        max_x=max_x,
+        max_y=max_y,
+        max_z=max_z,
+        volume_mm3=volume,
+    )
 
 
 def _export_stl(cq: Any, compound: Any) -> bytes:
@@ -221,10 +258,11 @@ def compile_plan(plan: DesignPlan, *, artifact_id: str) -> CompiledGeometry:
     data = _export_stl(cq, compound)
     artifact_hash = hashlib.sha256(data).hexdigest()
 
-    triangle_count, (min_x, min_y, max_x, max_y), volume = _mesh_stats(data)
+    stats = mesh_stats(data)
+    triangle_count = stats.triangle_count
     joints_inside = all(
-        min_x - _GEOMETRY_SLACK_MM <= joint.origin[0] <= max_x + _GEOMETRY_SLACK_MM
-        and min_y - _GEOMETRY_SLACK_MM <= joint.origin[1] <= max_y + _GEOMETRY_SLACK_MM
+        stats.min_x - _GEOMETRY_SLACK_MM <= joint.origin[0] <= stats.max_x + _GEOMETRY_SLACK_MM
+        and stats.min_y - _GEOMETRY_SLACK_MM <= joint.origin[1] <= stats.max_y + _GEOMETRY_SLACK_MM
         for joint in plan.joints
     )
     budget = min(
@@ -234,7 +272,7 @@ def compile_plan(plan: DesignPlan, *, artifact_id: str) -> CompiledGeometry:
     validation_results = {
         "mesh_non_empty": triangle_count > 0,
         "joints_inside_bounding_box": joints_inside,
-        "closed_volume": volume > 0.0,
+        "closed_volume": stats.volume_mm3 > 0.0,
         "size_within_budget": len(data) <= budget,
     }
     failed = [name for name, ok in validation_results.items() if not ok]
@@ -255,6 +293,7 @@ def compile_plan(plan: DesignPlan, *, artifact_id: str) -> CompiledGeometry:
 
 __all__ = [
     "ANGULAR_TOLERANCE_RAD",
+    "MeshStats",
     "COMPILER_VERSION",
     "CadNotAvailable",
     "CompiledGeometry",
@@ -262,4 +301,5 @@ __all__ = [
     "TESSELATION_TOLERANCE_MM",
     "compile_plan",
     "is_cad_available",
+    "mesh_stats",
 ]
