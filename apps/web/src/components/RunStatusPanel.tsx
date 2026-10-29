@@ -6,6 +6,7 @@ interface RunStatusPanelProps {
   events: RunEvent[];
   streamState: RunStreamState;
   onCancel: () => void;
+  expert: boolean;
 }
 
 const STREAM_LABELS: Record<RunStreamState, string | null> = {
@@ -28,7 +29,13 @@ function describeEvent(event: RunEvent): string {
   return parts.join(" · ");
 }
 
-export function RunStatusPanel({ run, events, streamState, onCancel }: RunStatusPanelProps) {
+export function RunStatusPanel({
+  run,
+  events,
+  streamState,
+  onCancel,
+  expert,
+}: RunStatusPanelProps) {
   const streamLabel = STREAM_LABELS[streamState];
   const cancellable = run?.status === "queued" || run?.status === "running";
   return (
@@ -101,14 +108,16 @@ export function RunStatusPanel({ run, events, streamState, onCancel }: RunStatus
         <p className="empty-state">Start a design run to stream progress events.</p>
       )}
 
-      <ol className="event-log">
+      {expert ? (
+        <ol className="event-log">
         {events.map((event, index) => (
           <li key={`${event.event}-${index}`}>
             <code>{event.event}</code>
             <span>{describeEvent(event)}</span>
           </li>
-        ))}
-      </ol>
+          ))}
+        </ol>
+      ) : null}
     </section>
   );
 }

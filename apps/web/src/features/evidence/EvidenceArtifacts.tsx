@@ -10,6 +10,7 @@ import {
 interface EvidenceArtifactsProps {
   run: DesignRun | null;
   candidates: CandidateRecord[];
+  expert: boolean;
 }
 
 type ArtifactState =
@@ -18,7 +19,7 @@ type ArtifactState =
   | { status: "loaded"; payload: unknown }
   | { status: "error"; message: string };
 
-export function EvidenceArtifacts({ run, candidates }: EvidenceArtifactsProps) {
+export function EvidenceArtifacts({ run, candidates, expert }: EvidenceArtifactsProps) {
   const [artifacts, setArtifacts] = useState<Record<string, ArtifactState>>({});
 
   if (!run) {
@@ -100,24 +101,30 @@ export function EvidenceArtifacts({ run, candidates }: EvidenceArtifactsProps) {
           }
           return (
             <li key={name} className="artifact-item">
-              <details
-                onToggle={(event) => {
-                  if ((event.target as HTMLDetailsElement).open) {
-                    void load(name);
-                  }
-                }}
-              >
-                <summary>
+              {expert ? (
+                <details
+                  onToggle={(event) => {
+                    if ((event.target as HTMLDetailsElement).open) {
+                      void load(name);
+                    }
+                  }}
+                >
+                  <summary>
+                    <code>{name}</code>
+                  </summary>
+                  {state.status === "loading" ? <p className="empty-state">Loading…</p> : null}
+                  {state.status === "error" ? (
+                    <p className="notice notice-error">{state.message}</p>
+                  ) : null}
+                  {state.status === "loaded" ? (
+                    <pre className="artifact-json">{JSON.stringify(state.payload, null, 2)}</pre>
+                  ) : null}
+                </details>
+              ) : (
+                <span className="artifact-binary">
                   <code>{name}</code>
-                </summary>
-                {state.status === "loading" ? <p className="empty-state">Loading…</p> : null}
-                {state.status === "error" ? (
-                  <p className="notice notice-error">{state.message}</p>
-                ) : null}
-                {state.status === "loaded" ? (
-                  <pre className="artifact-json">{JSON.stringify(state.payload, null, 2)}</pre>
-                ) : null}
-              </details>
+                </span>
+              )}
               <button
                 type="button"
                 className="artifact-download"

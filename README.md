@@ -35,8 +35,9 @@ Working today:
   with SHA-256 artifact hashes, timestamps and SQLite metadata for reconstruction
 - Parametric CAD: deterministic CadQuery/OpenCascade link-set compiler producing validated STL
   geometry artifacts with SHA-256 hashes (optional `cad` extra)
-- React + TypeScript + Vite UI with prompt form, live event log, validation report, candidate
-  history and a rendered reference trace
+- Three-panel React + TypeScript + Vite workspace with an interactive Three.js CAD viewport (from the
+  persisted STL artifact), motion preview from computed traces, an explicit concept/unavailable
+  mode, Beginner/Expert views, validation report, candidate history and artifact downloads
 - Docker Compose setup for the API and web app
 
 Not wired yet:
@@ -197,7 +198,8 @@ npm run build
 ```
 
 Evaluator, kinematics, parser and API tests run without a live model or simulator. CAD tests
-run when the `cad` extra is installed and skip otherwise. The Meta
+run when the `cad` extra is installed and skip otherwise. The web app has vitest UI tests
+(`cd apps/web && npm test`). The Meta
 adapter tests use `httpx.MockTransport`; a live smoke test is intentionally opt-in. Compiler,
 MuJoCo runner and reference-comparison tests run when the `sim` extra is installed and skip
 otherwise. The reviewed benchmark suites in `apps/api/benchmarks/` run as part of the suite;
@@ -219,7 +221,8 @@ apps/
     tests/            # Schema, evaluator, metrics and API tests
   web/
     src/
-      features/       # design-input, simulation, validation-report, candidate-history
+      features/       # design-input, clarifications, requirements, workspace (3D), simulation,
+                      # validation-report, candidate-history, evidence
       components/     # Shared UI pieces
       lib/            # Typed API client and run hook
 docker-compose.yml
