@@ -252,7 +252,7 @@ class DesignRunOrchestrator:
         if missing:
             raise ValueError(f"Missing answers for: {sorted(missing)}")
 
-        if run.capability_id in ("custom_part", "assembly"):
+        if run.capability_id in ("custom_part", "assembly", "structural_frame"):
             stored = self.artifacts.read_json(run_id, "part_brief.json")
             part_brief = PartBrief.model_validate(stored["brief"])
             try:
@@ -328,6 +328,9 @@ class DesignRunOrchestrator:
             "part.max_width_mm": "max_width_mm",
             "part.max_height_mm": "max_height_mm",
             "part.max_thickness_mm": "max_thickness_mm",
+            "max_width_mm": "max_width_mm",
+            "max_height_mm": "max_height_mm",
+            "max_thickness_mm": "max_thickness_mm",
         }
         if field in numeric_fields:
             try:
@@ -559,7 +562,11 @@ class DesignRunOrchestrator:
                 self._publish_capability_selected(run, assessment)
                 self._complete_without_candidates(run, None, "none", assessment, engine_info)
                 return
-            program_capability = entry.capability_id in ("custom_part", "assembly")
+            program_capability = entry.capability_id in (
+                "custom_part",
+                "assembly",
+                "structural_frame",
+            )
             if program_capability and not self.meta_client.is_configured:
                 assessment = CapabilityAssessment(
                     capability_id=entry.capability_id,
@@ -576,7 +583,7 @@ class DesignRunOrchestrator:
                 )
                 return
 
-        if run.capability_id in ("custom_part", "assembly"):
+        if run.capability_id in ("custom_part", "assembly", "structural_frame"):
             await self._run_program_pipeline(
                 run, resuming=resuming, engine_info=engine_info
             )
@@ -894,6 +901,7 @@ class DesignRunOrchestrator:
         source = "meta_model"
         capability_id = run.capability_id or "custom_part"
         assembly = capability_id == "assembly"
+        structural = capability_id == "structural_frame"
         capability = self.capabilities.get(capability_id)
         capability_version = capability.version if capability is not None else "0.1.0"
 
@@ -903,7 +911,10 @@ class DesignRunOrchestrator:
             brief = PartBrief.model_validate(stored["brief"])
         else:
             result = await parse_part_requirements(
-                run.original_prompt, client=self.meta_client, assembly=assembly
+                run.original_prompt,
+                client=self.meta_client,
+                assembly=assembly,
+                structure=structural,
             )
             self._record_completion(provider_calls, "requirements", result.completion)
             if result.brief is None:
@@ -916,6 +927,8 @@ class DesignRunOrchestrator:
                         or (
                             "the request is not an assemblable multi-part product"
                             if assembly
+                            else "the request is not a static structural frame"
+                            if structural
                             else "the request is not a single static part"
                         )
                     ],
@@ -994,6 +1007,15 @@ class DesignRunOrchestrator:
                 [*assessment.unsupported_requirements, *brief.unsupported_requirements]
             )
         )
+        if structural:
+            unsupported = list(
+                dict.fromkeys(
+                    [
+                        *unsupported,
+                        "structural analysis (loads, deflection, joint strength)",
+                    ]
+                )
+            )
         if unsupported:
             assessment = assessment.model_copy(
                 update={
@@ -1020,6 +1042,8 @@ class DesignRunOrchestrator:
                 max_attempts=run.max_candidates,
                 previous_feedback=previous_feedback,
                 assembly=assembly,
+                structure=structural,
+                capability_id=capability_id,
             )
             self._record_completion(provider_calls, f"program_{attempt:03d}", completion)
             source_hash = hashlib.sha256(program.source.encode("utf-8")).hexdigest()
@@ -1125,6 +1149,7 @@ class DesignRunOrchestrator:
                 program_id=program.program_id,
                 deterministic=deterministic,
                 require_assembly=assembly,
+                require_structure=structural,
             )
             if rejection is not None:
                 evaluation = evaluation.model_copy(
@@ -1243,6 +1268,15 @@ class DesignRunOrchestrator:
                         "are not verified."
                     ]
                     if assembly
+                    else []
+                ),
+                *(
+                    [
+                        "Only closed solid geometry, overall dimensions and determinism are "
+                        "verified; no load, deflection, joint-strength or safety analysis is "
+                        "performed."
+                    ]
+                    if structural
                     else []
                 ),
             ],

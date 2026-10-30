@@ -63,6 +63,33 @@ Rules:
 Do not claim any checks passed; an independent evaluator measures the exported parts."""
 
 
+STRUCTURE_PROGRAM_SYSTEM_PROMPT = """You write deterministic parametric CAD structures with
+CadQuery. Return strict JSON matching the schema. The source field must contain Python that
+defines build() returning a dict:
+
+    {"parts": {"<part_name>": <cadquery Workplane|Shape|Compound>, ...}}
+
+Joints are not needed for static structures. Rules:
+- Import only cadquery (optionally math). No other imports.
+- Deterministic geometry: no randomness, time, environment, network or filesystem access.
+- No dunder access, eval, exec, compile, open, os, sys, subprocess, pathlib or importlib.
+- 2 to 80 parts, part names matching [A-Za-z0-9_].
+- Model the structure in its assembled pose and fit inside the requested envelope: the measured
+  overall length, width and height (including connection plates and overhangs) must not exceed
+  the brief's dimensions by more than 5%. The requested length and width are hard maximums:
+  model the main span about 2-3% shorter so end plates and overhangs stay inside the envelope.
+- CadQuery API: use only cq.Workplane (box, cylinder, hole, extrude, cut, union, translate,
+  rotate), cq.Vector, cq.Shape and cq.Compound. Do not use cq.Quaternion or other unverified
+  APIs. Define helper functions with all required arguments and call them correctly; keep the
+  code simple and self-contained.
+- Every part must be a closed, non-empty solid in millimetres.
+- Connection plates, bolt holes and overlaps at joints are allowed; only closed solids, overall
+  dimensions and determinism are verified. No structural analysis is performed.
+- Keep loops bounded and primitives simple (box, cylinder, extrude, cut, union).
+
+Do not claim any checks passed; an independent evaluator measures the exported parts."""
+
+
 class DeclaredParameterProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -117,11 +144,17 @@ async def generate_program(
     max_attempts: int,
     previous_feedback: str | None = None,
     assembly: bool = False,
+    structure: bool = False,
+    capability_id: str = "custom_part",
 ) -> tuple[DesignProgram, ModelCompletion]:
+    if structure:
+        system_prompt = STRUCTURE_PROGRAM_SYSTEM_PROMPT
+    elif assembly:
+        system_prompt = ASSEMBLY_PROGRAM_SYSTEM_PROMPT
+    else:
+        system_prompt = PROGRAM_SYSTEM_PROMPT
     request = {
-        "system_prompt": (
-            ASSEMBLY_PROGRAM_SYSTEM_PROMPT if assembly else PROGRAM_SYSTEM_PROMPT
-        ),
+        "system_prompt": system_prompt,
         "user_prompt": build_program_user_prompt(
             brief,
             attempt_number=attempt_number,
@@ -140,7 +173,7 @@ async def generate_program(
         proposal = ProgramProposal.model_validate(completion.payload)
     program = DesignProgram(
         program_id=f"program_{attempt_number:03d}",
-        capability_id="custom_part",
+        capability_id=capability_id,
         source=proposal.source,
         declared_parameters=[
             DeclaredParameter(name=item.name, value=item.value)
@@ -158,6 +191,7 @@ async def generate_program(
 
 __all__ = [
     "ASSEMBLY_PROGRAM_SYSTEM_PROMPT",
+    "STRUCTURE_PROGRAM_SYSTEM_PROMPT",
     "PROGRAM_SYSTEM_PROMPT",
     "ProgramProposal",
     "build_program_user_prompt",

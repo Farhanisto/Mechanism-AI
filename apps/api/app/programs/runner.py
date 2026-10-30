@@ -215,7 +215,7 @@ def run_design_program(
             )
 
         raw_parts = result.get("parts") or []
-        if not isinstance(raw_parts, list) or len(raw_parts) > 12:
+        if not isinstance(raw_parts, list) or len(raw_parts) > 80:
             return _failure(duration_ms, stdout, "the manifest lists an invalid part set")
         parts: list[ProgramPartExecution] = []
         names: set[str] = set()

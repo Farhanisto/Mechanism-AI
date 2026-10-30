@@ -211,16 +211,71 @@ ASSEMBLY_CAPABILITY = CapabilityEntry(
 )
 
 
+STRUCTURAL_CAPABILITY = CapabilityEntry(
+    capability_id="structural_frame",
+    version="0.1.0",
+    domain="static structural frame or truss of multiple solid parts inside an envelope",
+    input_schema="PartBrief",
+    output_schema="DesignProgram (structure) + per-part GeometryArtifact (stl)",
+    units="mm",
+    parameter_constraints={
+        "parts": "2 to 80",
+        "envelope": "positive dimensions, at most 10000 mm",
+    },
+    evaluation_checks=(
+        "program_executed",
+        "mesh_valid",
+        "envelope_width",
+        "envelope_height",
+        "envelope_thickness",
+        "determinism",
+        "size_within_budget",
+        "parts_present",
+        "span_matches_envelope",
+    ),
+    known_limitations=(
+        "Design programs run in a best-effort sandbox (import allowlist, curated builtins, "
+        "resource limits); it is not a hardened OS boundary.",
+        "Only closed solid geometry, overall dimensions (5% envelope tolerance) and determinism "
+        "are verified; no load, deflection, joint-strength or safety analysis is performed.",
+        "Connection plates and bolt holes are geometry only; fasteners, material properties, "
+        "tolerances and manufacturing are not modeled.",
+    ),
+    resource_limits={
+        "max_program_seconds": 15.0,
+        "max_export_bytes": 5_000_000.0,
+        "max_parts": 80.0,
+    },
+    test_status="tested",
+    domain_terms=(
+        "truss",
+        "bridge",
+        "girder",
+        "joist",
+        "plank",
+        "deck",
+        "brace",
+        "lattice",
+        "strut",
+        "beam",
+        "column",
+        "frame",
+    ),
+)
+
+
 def default_registry() -> CapabilityRegistry:
     registry = CapabilityRegistry()
     registry.register(FOUR_BAR_CAPABILITY)
     registry.register(CUSTOM_PART_CAPABILITY)
     registry.register(ASSEMBLY_CAPABILITY)
+    registry.register(STRUCTURAL_CAPABILITY)
     return registry
 
 
 __all__ = [
     "ASSEMBLY_CAPABILITY",
+    "STRUCTURAL_CAPABILITY",
     "CUSTOM_PART_CAPABILITY",
     "CapabilityEntry",
     "CapabilityRegistry",

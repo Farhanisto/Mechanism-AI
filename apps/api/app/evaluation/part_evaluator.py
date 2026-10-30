@@ -35,6 +35,13 @@ ASSEMBLY_CHECKS = (
     "joints_valid",
     "articulation_clearance",
 )
+STRUCTURE_CHECKS = (
+    "parts_present",
+    "span_matches_envelope",
+)
+MIN_STRUCTURE_PARTS = 4
+SPAN_TOLERANCE_RATIO = 0.9
+STRUCTURE_ENVELOPE_TOLERANCE_RATIO = 0.05
 
 
 def evaluate_part(
@@ -44,6 +51,7 @@ def evaluate_part(
     program_id: str,
     deterministic: bool | None,
     require_assembly: bool = False,
+    require_structure: bool = False,
 ) -> PartEvaluation:
     notes: list[str] = []
     checks: dict[str, bool] = {}
@@ -60,15 +68,16 @@ def evaluate_part(
     )
 
     if stats is not None:
+        ratio = STRUCTURE_ENVELOPE_TOLERANCE_RATIO if require_structure else 0.0
         for name, actual, limit in (
             ("width", stats.width_mm, brief.part.max_width_mm),
             ("height", stats.height_mm, brief.part.max_height_mm),
             ("thickness", stats.thickness_mm, brief.part.max_thickness_mm),
         ):
-            within = actual <= limit + ENVELOPE_TOLERANCE_MM
+            within = actual <= limit * (1.0 + ratio) + ENVELOPE_TOLERANCE_MM
             checks[f"envelope_{name}"] = within
             if not within:
-                allowance = limit + ENVELOPE_TOLERANCE_MM
+                allowance = limit * (1.0 + ratio) + ENVELOPE_TOLERANCE_MM
                 notes.append(
                     f"Measured {name} {actual:.2f} mm exceeds the {limit:.2f} mm "
                     f"envelope ({allowance:.2f} mm including tolerance)."
@@ -124,9 +133,35 @@ def evaluate_part(
         if not checks["joints_valid"]:
             notes.append("An assembly needs at least one valid revolute joint.")
 
+    if require_structure:
+        checks["parts_present"] = bool(executed and len(parts) >= MIN_STRUCTURE_PARTS)
+        if stats is not None:
+            envelope_max = max(
+                brief.part.max_width_mm,
+                brief.part.max_height_mm,
+                brief.part.max_thickness_mm,
+            )
+            measured_max = max(stats.width_mm, stats.height_mm, stats.thickness_mm)
+            checks["span_matches_envelope"] = (
+                measured_max >= envelope_max * SPAN_TOLERANCE_RATIO
+            )
+        else:
+            checks["span_matches_envelope"] = False
+        if not checks["parts_present"]:
+            notes.append(
+                f"A structural frame needs at least {MIN_STRUCTURE_PARTS} parts."
+            )
+        if not checks["span_matches_envelope"]:
+            notes.append(
+                "The structure is much smaller than the requested envelope; model it at "
+                "the requested span/length."
+            )
+
     ordered = list(CHECKS)
     if require_assembly:
         ordered.extend(ASSEMBLY_CHECKS)
+    if require_structure:
+        ordered.extend(STRUCTURE_CHECKS)
     failed = [name for name in ordered if not checks.get(name, False)]
 
     total_volume = sum(part.stats.volume_mm3 for part in parts)
@@ -154,6 +189,10 @@ def evaluate_part(
 
 __all__ = [
     "ARTICULATION_ANGLES",
+    "STRUCTURE_ENVELOPE_TOLERANCE_RATIO",
+    "MIN_STRUCTURE_PARTS",
+    "SPAN_TOLERANCE_RATIO",
+    "STRUCTURE_CHECKS",
     "ASSEMBLY_CHECKS",
     "CHECKS",
     "ENVELOPE_TOLERANCE_MM",

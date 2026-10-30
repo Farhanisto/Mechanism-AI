@@ -140,8 +140,8 @@ def main() -> int:
             raw_parts = {"part": built}
             raw_joints = []
 
-        if len(raw_parts) > 12:
-            raise ValueError("the assembly exceeds the part budget (max 12)")
+        if len(raw_parts) > 80:
+            raise ValueError("the assembly exceeds the part budget (max 80)")
         if len(raw_joints) > 6:
             raise ValueError("the assembly exceeds the joint budget (max 6)")
 

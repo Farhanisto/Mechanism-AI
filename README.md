@@ -35,9 +35,10 @@ Working today:
   with SHA-256 artifact hashes, timestamps and SQLite metadata for reconstruction
 - Parametric CAD: deterministic CadQuery/OpenCascade link-set compiler producing validated STL
   geometry artifacts with SHA-256 hashes (optional `cad` extra)
-- Model-authored design programs: the Meta model composes `custom_part` solids and multi-part
-  `assembly` designs (named parts + revolute joints) as CadQuery code, a sandbox executes them,
-  and an independent evaluator verifies the exported meshes and articulation
+- Model-authored design programs: the Meta model composes `custom_part` solids, multi-part
+  `assembly` designs (named parts + revolute joints) and static `structural_frame` structures
+  (trusses, beams, decks) as CadQuery code; a sandbox executes them and an independent evaluator
+  verifies the exported meshes, articulation and overall dimensions
 - Three-panel React + TypeScript + Vite workspace with an interactive Three.js CAD viewport (from the
   persisted STL artifact), motion preview from computed traces, an explicit concept/unavailable
   mode, Beginner/Expert views, validation report, candidate history and artifact downloads
@@ -202,12 +203,19 @@ tools execute it, and the evaluator verifies the result.**
    least one valid joint, and **articulation clearance**: the child part is rotated through the
    declared range and must not interpenetrate the parent (penetration deeper than 0.2 mm fails).
    Only the declared jointed pair is checked; pins, bores and hardware clearances are not verified.
-6. **Independent evaluation.** Fixed checks in `app/evaluation/part_evaluator.py` judge the exported
+6. **Structures.** For the `structural_frame` capability `build()` returns only named parts
+   (joints are optional). Checks require at least four closed solids, the assembled span to match
+   the requested envelope (at least 90% of the largest requested dimension), the envelope bounds
+   (5% overall tolerance),
+   determinism and export size. Connection plates, bolt holes and overlaps at joints are allowed
+   as geometry; **no load, deflection, joint-strength or safety analysis is performed** and the
+   evidence bundle says so explicitly.
+7. **Independent evaluation.** Fixed checks in `app/evaluation/part_evaluator.py` judge the exported
    meshes, not the program: program executed, meshes valid (closed volume), measured width/height/
    thickness within the requested envelope, deterministic (two runs produce the same mesh hashes),
    export size within budget, and for assemblies the parts/joints/articulation checks above.
    Thresholds live in code; model output cannot change them.
-7. **Bounded repair.** Failed checks and execution errors feed back into the next program attempt
+8. **Bounded repair.** Failed checks and execution errors feed back into the next program attempt
    (up to three). Exhausted budgets end as an honest `no_pass` with the failed checks named; the
    best attempt is reported.
 
