@@ -8,6 +8,10 @@ vi.mock("./CadViewer", () => ({
   CadViewer: ({ url }: { url: string }) => <div data-testid="cad-viewer">{url}</div>,
 }));
 
+vi.mock("./Motion3DViewer", () => ({
+  Motion3DViewer: () => <div data-testid="motion-3d" />,
+}));
+
 const simulation: SimulationResult = {
   candidate_id: "candidate_001",
   engine: "mujoco",
@@ -85,7 +89,43 @@ describe("Workspace3D", () => {
     renderWorkspace({ simulation });
 
     expect(screen.getByText("computed state trace")).toBeTruthy();
-    expect(screen.getByText(/Rendered from persisted simulation samples/)).toBeTruthy();
+    expect(screen.getByTestId("motion-3d")).toBeTruthy();
+    expect(screen.getByText(/measured sweep/)).toBeTruthy();
+  });
+
+  it("switches to the CAD view when the geometry artifact arrives", () => {
+    const view = renderWorkspace();
+    expect(screen.getByText("computed state trace")).toBeTruthy();
+
+    view.rerender(
+      <Workspace3D
+        geometryUrl="http://localhost:8000/geometry_program_001.stl"
+        geometryArtifactId="geometry_program_001.stl"
+        simulation={null}
+        brief={null}
+        metrics={null}
+      />,
+    );
+
+    expect(screen.getByTestId("cad-viewer")).toBeTruthy();
+  });
+
+  it("keeps the user's chosen mode when new geometry arrives", () => {
+    const view = renderWorkspace();
+
+    fireEvent.click(screen.getByText("Motion"));
+    view.rerender(
+      <Workspace3D
+        geometryUrl="http://localhost:8000/geometry_program_001.stl"
+        geometryArtifactId="geometry_program_001.stl"
+        simulation={null}
+        brief={null}
+        metrics={null}
+      />,
+    );
+
+    expect(screen.queryByTestId("cad-viewer")).toBeNull();
+    expect(screen.getByText("computed state trace")).toBeTruthy();
   });
 
   it("marks concept mode as not available instead of faking an animation", () => {

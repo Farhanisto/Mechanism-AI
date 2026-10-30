@@ -22,7 +22,7 @@ CAPABILITY_VERSION = "0.1.0"
 LINK_WIDTH_MM = 12.0
 LINK_THICKNESS_MM = 4.0
 PIN_HOLE_DIAMETER_MM = 6.0
-SUPPORTED_OPERATIONS = ("extrude_link",)
+SUPPORTED_OPERATIONS = ("extrude_link", "add_pin")
 
 
 class InvalidPlanError(ValueError):
@@ -50,10 +50,20 @@ def _joint_positions(candidate: Candidate) -> dict[str, tuple[float, float]]:
     return {"o2": o2, "a": a, "b": b, "o4": o4}
 
 
-def plan_from_candidate(candidate: Candidate) -> DesignPlan:
-    """Build the deterministic link-set plan for a validated candidate."""
+def plan_from_candidate(
+    candidate: Candidate,
+    *,
+    link_width_mm: float | None = None,
+    link_thickness_mm: float | None = None,
+    pivot_hole_mm: float | None = None,
+    include_pins: bool = False,
+) -> DesignPlan:
+    """Build the deterministic link-set plan, honoring stated CAD specs."""
     parameters = candidate.parameters
     joints = _joint_positions(candidate)
+    width = link_width_mm or LINK_WIDTH_MM
+    thickness = link_thickness_mm or LINK_THICKNESS_MM
+    hole = pivot_hole_mm or PIN_HOLE_DIAMETER_MM
     links = (
         ("ground_link", joints["o2"], joints["o4"], parameters.ground_length),
         ("crank_link", joints["o2"], joints["a"], parameters.crank_length),
@@ -66,9 +76,9 @@ def plan_from_candidate(candidate: Candidate) -> DesignPlan:
             kind="link",
             parameters={
                 "length": length,
-                "width": LINK_WIDTH_MM,
-                "thickness": LINK_THICKNESS_MM,
-                "pin_hole_diameter": PIN_HOLE_DIAMETER_MM,
+                "width": width,
+                "thickness": thickness,
+                "pin_hole_diameter": hole,
                 "start_x": start[0],
                 "start_y": start[1],
                 "end_x": end[0],
@@ -93,15 +103,39 @@ def plan_from_candidate(candidate: Candidate) -> DesignPlan:
         )
         for joint_id, parent, child, position in joints_spec
     ]
+    operations = [
+        PlanGeometryOp(operation="extrude_link", component_id=component.component_id)
+        for component in components
+    ]
+    if include_pins:
+        pin_joints = (
+            ("pin_o2", joints["o2"]),
+            ("pin_a", joints["a"]),
+            ("pin_b", joints["b"]),
+            ("pin_o4", joints["o4"]),
+        )
+        for component_id, position in pin_joints:
+            components.append(
+                PlanComponent(
+                    component_id=component_id,
+                    kind="pin",
+                    parameters={
+                        "radius": hole / 2.0,
+                        "length": thickness + 6.0,
+                        "x": position[0],
+                        "y": position[1],
+                    },
+                )
+            )
+            operations.append(
+                PlanGeometryOp(operation="add_pin", component_id=component_id)
+            )
     return DesignPlan(
         capability_id=CAPABILITY_ID,
         capability_version=CAPABILITY_VERSION,
         components=components,
         joints=plan_joints,
-        geometry_operations=[
-            PlanGeometryOp(operation="extrude_link", component_id=component.component_id)
-            for component in components
-        ],
+        geometry_operations=operations,
         required_checks=[
             "mesh_non_empty",
             "joints_inside_bounding_box",

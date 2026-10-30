@@ -20,7 +20,11 @@ from app.ai.meta_client import (
 )
 from app.ai.part_parser import parse_part_requirements
 from app.ai.program_parser import generate_program
-from app.ai.requirements_parser import default_brief_from_prompt, parse_requirements
+from app.ai.requirements_parser import (
+    apply_prompt_cad_specs,
+    default_brief_from_prompt,
+    parse_requirements,
+)
 from app.cad.compiler import (
     COMPILER_VERSION as CAD_COMPILER_VERSION,
 )
@@ -622,6 +626,7 @@ class DesignRunOrchestrator:
             else:
                 brief = default_brief_from_prompt(run.original_prompt)
 
+        brief = apply_prompt_cad_specs(brief, run.original_prompt)
         self.artifacts.write_json(
             run.run_id,
             "brief.json",
@@ -722,7 +727,7 @@ class DesignRunOrchestrator:
             )
 
             self._update_run(run, stage=Stage.COMPILE_MODEL)
-            geometry_artifact = self._compile_geometry(run, candidate)
+            geometry_artifact = self._compile_geometry(run, candidate, brief)
             if geometry_artifact is not None:
                 if geometry_artifact.generation_status == "generated":
                     candidate = candidate.model_copy(
@@ -1337,14 +1342,23 @@ class DesignRunOrchestrator:
         )
 
     def _compile_geometry(
-        self, run: DesignRun, candidate: Candidate
+        self,
+        run: DesignRun,
+        candidate: Candidate,
+        brief: NormalizedBrief | None = None,
     ) -> GeometryArtifact | None:
         """Compile the candidate into a geometry artifact when CAD is available."""
         if not is_cad_available():
             return None
         artifact_id = f"geometry_{candidate.candidate_id}.stl"
         try:
-            plan = plan_from_candidate(candidate)
+            plan = plan_from_candidate(
+                candidate,
+                link_width_mm=brief.link_width_mm if brief is not None else None,
+                link_thickness_mm=brief.link_thickness_mm if brief is not None else None,
+                pivot_hole_mm=brief.pivot_hole_mm if brief is not None else None,
+                include_pins=brief.include_pins if brief is not None else False,
+            )
             compiled = compile_plan(plan, artifact_id=artifact_id)
         except InvalidPlanError as exc:
             return GeometryArtifact(

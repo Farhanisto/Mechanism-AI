@@ -33,6 +33,10 @@ BRIEF_PAYLOAD: dict[str, Any] = {
     "clarification_questions": [],
     "requirement_sources": [],
     "requested_checks": [],
+    "link_width_mm": None,
+    "link_thickness_mm": None,
+    "pivot_hole_mm": None,
+    "include_pins": False,
 }
 
 CANDIDATE_PAYLOAD: dict[str, Any] = {
@@ -97,6 +101,10 @@ async def test_requirements_parser_validates_and_adds_standard_assumptions() -> 
         "clarification_questions",
         "requirement_sources",
         "requested_checks",
+        "link_width_mm",
+        "link_thickness_mm",
+        "pivot_hole_mm",
+        "include_pins",
     }
     assert "TargetMotionProposal" in call["schema"]["$defs"]
 
@@ -188,6 +196,19 @@ def test_default_candidates_change_with_attempt() -> None:
     assert second.candidate_id == "candidate_002"
 
 
+def test_default_brief_extracts_component_cad_specs() -> None:
+    brief = default_brief_from_prompt(
+        "Build a four-bar linkage. Make each link 6 mm thick with 8 mm pivot holes. "
+        "Add cylindrical pins and assemble all components using revolute joints."
+    )
+
+    assert brief.link_thickness_mm == 6.0
+    assert brief.pivot_hole_mm == 8.0
+    assert brief.include_pins is True
+    assert brief.requirement_sources["link_thickness_mm"] == "user_provided"
+    assert brief.requirement_sources["pivot_hole_mm"] == "user_provided"
+
+
 def test_default_brief_records_provenance_and_unknowns() -> None:
     brief = default_brief_from_prompt("Design a four-bar linkage.")
 
@@ -248,3 +269,28 @@ async def test_parse_requirements_merges_policy_questions_with_model_questions()
     assert "verification_scope.kinematic_only" in fields
     assert brief.unknowns == ["material"]
     assert brief.requirement_sources["target_motion.travel_distance"] == "user_provided"
+
+
+def test_apply_prompt_cad_specs_backfills_missing_model_values() -> None:
+    from app.ai.requirements_parser import apply_prompt_cad_specs
+    from app.mechanism.schemas import HardConstraints, NormalizedBrief, TargetMotion
+
+    brief = NormalizedBrief(
+        target_motion=TargetMotion(travel_distance=100.0),
+        constraints=HardConstraints(max_footprint=200.0),
+    )
+    prompt = (
+        "Make each link 6 mm thick with 8 mm pivot holes. Add cylindrical pins."
+    )
+
+    filled = apply_prompt_cad_specs(brief, prompt)
+
+    assert filled.link_thickness_mm == 6.0
+    assert filled.pivot_hole_mm == 8.0
+    assert filled.include_pins is True
+    assert filled.requirement_sources["link_thickness_mm"] == "user_provided"
+
+    # Model-provided values win over prompt heuristics.
+    explicit = brief.model_copy(update={"link_thickness_mm": 5.0, "include_pins": True})
+    kept = apply_prompt_cad_specs(explicit, prompt)
+    assert kept.link_thickness_mm == 5.0

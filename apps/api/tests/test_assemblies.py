@@ -136,6 +136,14 @@ class ScriptedClient:
         return None
 
 
+COMPONENT_LINKAGE_PROMPT = (
+    "Build a four-bar linkage using four separate components: ground link (120 mm), "
+    "crank (40 mm), coupler (100 mm), and rocker (90 mm). Make each link 6 mm thick "
+    "with 8 mm pivot holes. Add cylindrical pins and assemble all components using "
+    "revolute joints. Keep the ground link fixed."
+)
+
+
 def test_hinge_prompt_routes_to_the_assembly_capability() -> None:
     registry = default_registry()
 
@@ -144,6 +152,14 @@ def test_hinge_prompt_routes_to_the_assembly_capability() -> None:
         registry.match_domain("Design a four-bar linkage with 100 mm travel").capability_id
         == "four_bar_linkage"
     )
+
+
+def test_component_linkage_prompt_stays_on_the_four_bar_capability() -> None:
+    registry = default_registry()
+
+    # A four-bar linkage request keeps the four-bar capability (and its kinematic
+    # evaluation) even when it asks for separate components, pins and joints.
+    assert registry.match_domain(COMPONENT_LINKAGE_PROMPT).capability_id == "four_bar_linkage"
 
 
 def test_sandbox_exports_assembly_parts_and_joints() -> None:

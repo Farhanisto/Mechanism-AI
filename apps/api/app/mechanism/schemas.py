@@ -76,6 +76,10 @@ class NormalizedBrief(BaseModel):
     evaluator_config: dict[str, float | int | str | bool] = Field(default_factory=dict)
     unknowns: list[str] = Field(default_factory=list)
     requested_checks: list[str] = Field(default_factory=list)
+    link_width_mm: float | None = Field(default=None, gt=0, le=1_000)
+    link_thickness_mm: float | None = Field(default=None, gt=0, le=100)
+    pivot_hole_mm: float | None = Field(default=None, gt=0, le=100)
+    include_pins: bool = False
     clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
     requirement_sources: dict[str, RequirementSource] = Field(default_factory=dict)
     capability_assessment: CapabilityAssessment | None = None

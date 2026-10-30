@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { BriefArtifact, CandidateMetrics, SimulationResult } from "../../lib/api";
 import { MechanismCanvas } from "../simulation/MechanismCanvas";
 import { CadViewer } from "./CadViewer";
+import { Motion3DViewer } from "./Motion3DViewer";
+import { OutputAnglePlot } from "./OutputAnglePlot";
 
 type WorkspaceMode = "cad" | "motion" | "concept";
 
@@ -28,6 +30,26 @@ export function Workspace3D({
   metrics,
 }: Workspace3DProps) {
   const [mode, setMode] = useState<WorkspaceMode>(geometryUrl ? "cad" : "motion");
+  const [userSelectedMode, setUserSelectedMode] = useState(false);
+
+  useEffect(() => {
+    // Open on the most informative verified view as soon as the run produces it,
+    // unless the viewer explicitly chose another mode. Without this the workspace
+    // stayed on the initial mode because its state was computed before the run.
+    if (userSelectedMode) {
+      return;
+    }
+    if (simulation && simulation.samples.length > 0) {
+      setMode("motion");
+    } else if (geometryUrl) {
+      setMode("cad");
+    }
+  }, [geometryUrl, simulation, userSelectedMode]);
+
+  const selectMode = (next: WorkspaceMode) => {
+    setUserSelectedMode(true);
+    setMode(next);
+  };
 
   return (
     <section className="panel workspace">
@@ -41,7 +63,7 @@ export function Workspace3D({
               role="tab"
               aria-selected={mode === item.id}
               className={`mode-tab${mode === item.id ? " mode-tab-active" : ""}`}
-              onClick={() => setMode(item.id)}
+              onClick={() => selectMode(item.id)}
             >
               {item.label}
             </button>
@@ -70,9 +92,25 @@ export function Workspace3D({
         <div className="workspace-body">
           <div className="mode-badges">
             <span className="badge badge-computed">computed state trace</span>
-            <span className="mode-note">Rendered from persisted simulation samples</span>
+            <span className="mode-note">
+              3D animation built from persisted simulation samples
+            </span>
           </div>
-          <MechanismCanvas simulation={simulation} brief={brief} metrics={metrics} />
+          {simulation && simulation.samples.length > 0 ? (
+            <>
+              <Motion3DViewer simulation={simulation} />
+              <OutputAnglePlot simulation={simulation} />
+              <details className="motion-trace">
+                <summary>Computed path trace (2D)</summary>
+                <MechanismCanvas simulation={simulation} brief={brief} metrics={metrics} />
+              </details>
+            </>
+          ) : (
+            <p className="empty-state">
+              No computed motion trace for this run. The four-bar path produces motion
+              samples; assembly runs verify static articulation only.
+            </p>
+          )}
         </div>
       ) : null}
 

@@ -22,14 +22,26 @@ four-bar linkage mechanism. Record every value you had to infer in assumptions.
 Mark the provenance of each requirement in requirement_sources, put anything
 missing in unknowns, ask a blocking clarification question only when an unknown
 materially changes the design, and list required checks beyond the standard set
-in requested_checks. Do not invent constraints that the prompt does not state;
-use the documented defaults only when a critical value is missing."""
+in requested_checks. Capture component CAD details when the prompt states them:
+link width, link thickness and pivot hole diameter in millimetres, and whether
+cylindrical pins should be included; use null/false when not stated. Do not
+invent constraints that the prompt does not state; use the documented defaults
+only when a critical value is missing."""
 
 _STANDARD_ASSUMPTIONS = (
     "Output point is the rocker pin; the ground link is a fixed frame.",
     "Links are zero-thickness line segments; ground/frame contact is not a collision.",
 )
 _MM_PATTERN = re.compile(r"(?P<value>\d+(?:\.\d+)?)\s*mm", re.IGNORECASE)
+_MM_THICKNESS_PATTERN = re.compile(
+    r"(\d+(?:\.\d+)?)\s*mm\s*(?:thick|thickness)", re.IGNORECASE
+)
+_MM_HOLE_PATTERN = re.compile(
+    r"(\d+(?:\.\d+)?)\s*mm\s*(?:pivot\s*)?holes?", re.IGNORECASE
+)
+_MM_WIDTH_PATTERN = re.compile(
+    r"(\d+(?:\.\d+)?)\s*mm\s*(?:wide|width)", re.IGNORECASE
+)
 _UNMODELED_MOTION_PATTERN = re.compile(
     r"\b(vertical|rotate|rotates|rotary|rotating|circular|spiral)\b",
     re.IGNORECASE,
@@ -80,6 +92,10 @@ class BriefProposal(BaseModel):
     clarification_questions: list[ClarificationQuestionProposal]
     requirement_sources: list[RequirementSourceProposal]
     requested_checks: list[str]
+    link_width_mm: float | None
+    link_thickness_mm: float | None
+    pivot_hole_mm: float | None
+    include_pins: bool
 
 
 def policy_clarification_questions(
@@ -106,7 +122,12 @@ def policy_clarification_questions(
                 blocking=True,
             )
         )
-    if include_motion and _UNMODELED_MOTION_PATTERN.search(prompt):
+    input_motion_described = re.search(r"\b(input|crank)\b", prompt, re.IGNORECASE)
+    if (
+        include_motion
+        and _UNMODELED_MOTION_PATTERN.search(prompt)
+        and not input_motion_described
+    ):
         questions.append(
             ClarificationQuestion(
                 question_id="target_motion_type",
@@ -140,6 +161,39 @@ def _with_standard_assumptions(brief: NormalizedBrief) -> NormalizedBrief:
         if assumption not in assumptions:
             assumptions.append(assumption)
     return brief.model_copy(update={"assumptions": assumptions})
+
+
+def _extract_spec(pattern: re.Pattern[str], prompt: str) -> float | None:
+    match = pattern.search(prompt)
+    return float(match.group(1)) if match else None
+
+
+def apply_prompt_cad_specs(brief: NormalizedBrief, prompt: str) -> NormalizedBrief:
+    """Fill component CAD specs the model left unset with explicit prompt values."""
+    updates: dict[str, object] = {}
+    sources = dict(brief.requirement_sources)
+    if brief.link_thickness_mm is None:
+        value = _extract_spec(_MM_THICKNESS_PATTERN, prompt)
+        if value is not None:
+            updates["link_thickness_mm"] = value
+            sources["link_thickness_mm"] = RequirementSource.USER_PROVIDED
+    if brief.pivot_hole_mm is None:
+        value = _extract_spec(_MM_HOLE_PATTERN, prompt)
+        if value is not None:
+            updates["pivot_hole_mm"] = value
+            sources["pivot_hole_mm"] = RequirementSource.USER_PROVIDED
+    if brief.link_width_mm is None:
+        value = _extract_spec(_MM_WIDTH_PATTERN, prompt)
+        if value is not None:
+            updates["link_width_mm"] = value
+            sources["link_width_mm"] = RequirementSource.USER_PROVIDED
+    if not brief.include_pins and re.search(r"\bpins?\b", prompt, re.IGNORECASE):
+        updates["include_pins"] = True
+        sources["include_pins"] = RequirementSource.USER_PROVIDED
+    if not updates:
+        return brief
+    updates["requirement_sources"] = sources
+    return brief.model_copy(update=updates)
 
 
 def _number_near(
@@ -185,6 +239,11 @@ def default_brief_from_prompt(prompt: str) -> NormalizedBrief:
         used_positions=used_positions,
     )
 
+    link_thickness = _extract_spec(_MM_THICKNESS_PATTERN, prompt)
+    pivot_hole = _extract_spec(_MM_HOLE_PATTERN, prompt)
+    link_width = _extract_spec(_MM_WIDTH_PATTERN, prompt)
+    include_pins = bool(re.search(r"\bpins?\b", prompt, re.IGNORECASE))
+
     assumptions = [
         "Near-horizontal target interpreted as a straight level output path.",
     ]
@@ -212,6 +271,24 @@ def default_brief_from_prompt(prompt: str) -> NormalizedBrief:
             if found_footprint
             else RequirementSource.DEFAULT_ASSUMPTION
         ),
+        **(
+            {"link_thickness_mm": RequirementSource.USER_PROVIDED}
+            if link_thickness is not None
+            else {}
+        ),
+        **(
+            {"pivot_hole_mm": RequirementSource.USER_PROVIDED}
+            if pivot_hole is not None
+            else {}
+        ),
+        **(
+            {"link_width_mm": RequirementSource.USER_PROVIDED}
+            if link_width is not None
+            else {}
+        ),
+        **(
+            {"include_pins": RequirementSource.USER_PROVIDED} if include_pins else {}
+        ),
     }
     unknowns = [
         field
@@ -235,6 +312,10 @@ def default_brief_from_prompt(prompt: str) -> NormalizedBrief:
             ),
             assumptions=assumptions,
             unknowns=unknowns,
+            link_width_mm=link_width,
+            link_thickness_mm=link_thickness,
+            pivot_hole_mm=pivot_hole,
+            include_pins=include_pins,
             clarification_questions=policy_clarification_questions(prompt),
             requirement_sources=requirement_sources,
         )
@@ -268,6 +349,10 @@ async def parse_requirements(
                 item.field: item.source for item in proposal.requirement_sources
             },
             "requested_checks": proposal.requested_checks,
+            "link_width_mm": proposal.link_width_mm,
+            "link_thickness_mm": proposal.link_thickness_mm,
+            "pivot_hole_mm": proposal.pivot_hole_mm,
+            "include_pins": proposal.include_pins,
         }
     )
     brief = brief.model_copy(

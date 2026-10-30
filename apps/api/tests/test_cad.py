@@ -12,6 +12,7 @@ from app.ai.candidate_parser import default_candidate  # noqa: E402
 from app.cad.compiler import (  # noqa: E402
     COMPILER_VERSION,
     compile_plan,
+    mesh_stats,
 )
 from app.cad.plan import InvalidPlanError, plan_from_candidate  # noqa: E402
 from app.mechanism.schemas import (  # noqa: E402
@@ -133,6 +134,33 @@ def test_unassemblable_candidate_is_rejected() -> None:
 
     with pytest.raises(InvalidPlanError, match="cannot be assembled"):
         plan_from_candidate(candidate)
+
+
+def test_plan_honors_component_specs_and_adds_pins() -> None:
+    plan = plan_from_candidate(
+        default_candidate(attempt_number=1),
+        link_thickness_mm=6.0,
+        pivot_hole_mm=8.0,
+        include_pins=True,
+    )
+
+    kinds = [component.kind for component in plan.components]
+    assert kinds.count("link") == 4
+    assert kinds.count("pin") == 4
+    assert all(
+        component.parameters["thickness"] == 6.0
+        and component.parameters["pin_hole_diameter"] == 8.0
+        for component in plan.components
+        if component.kind == "link"
+    )
+
+    compiled = compile_plan(plan, artifact_id="geometry_specs.stl")
+    assert compiled.artifact.generation_status == "generated"
+    stats = mesh_stats(compiled.data)
+    # 6 mm plates plus 12 mm pins protruding through them.
+    assert stats.thickness_mm == pytest.approx(12.0, abs=0.2)
+    repeated = compile_plan(plan, artifact_id="geometry_specs.stl")
+    assert repeated.data == compiled.data
 
 
 async def test_pipeline_writes_the_geometry_artifact(tmp_path: Path) -> None:

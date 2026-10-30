@@ -31,7 +31,7 @@ ANGULAR_TOLERANCE_RAD = 0.1
 _MAX_LINK_LENGTH_MM = 10_000.0
 _GEOMETRY_SLACK_MM = 0.6
 
-_REQUIRED_PARAMETERS = (
+_LINK_PARAMETERS = (
     "length",
     "width",
     "thickness",
@@ -41,6 +41,7 @@ _REQUIRED_PARAMETERS = (
     "end_x",
     "end_y",
 )
+_PIN_PARAMETERS = ("radius", "length", "x", "y")
 
 
 class CadNotAvailable(RuntimeError):
@@ -103,20 +104,35 @@ def _validate_plan(plan: DesignPlan) -> None:
             raise InvalidPlanError(f"joint {joint.joint_id!r} references unknown components")
 
     for component in plan.components:
-        if component.kind != "link":
+        if component.kind not in ("link", "pin"):
             raise InvalidPlanError(f"unsupported component kind {component.kind!r}")
-        missing = [name for name in _REQUIRED_PARAMETERS if name not in component.parameters]
+        required = _LINK_PARAMETERS if component.kind == "link" else _PIN_PARAMETERS
+        missing = [name for name in required if name not in component.parameters]
         if missing:
             raise InvalidPlanError(
                 f"component {component.component_id!r} is missing parameters: {missing}"
             )
         parameters = component.parameters
-        for name in _REQUIRED_PARAMETERS:
+        for name in required:
             value = parameters[name]
             if not math.isfinite(value):
                 raise InvalidPlanError(
                     f"component {component.component_id!r} parameter {name!r} is not finite"
                 )
+        if component.kind == "pin":
+            radius = parameters["radius"]
+            length = parameters["length"]
+            if not 0.0 < radius <= 50.0:
+                raise InvalidPlanError("pin radius is outside the supported range")
+            if not 0.0 < length <= 1_000.0:
+                raise InvalidPlanError("pin length is outside the supported range")
+            out_of_bounds = (
+                abs(parameters["x"]) > _MAX_LINK_LENGTH_MM
+                or abs(parameters["y"]) > _MAX_LINK_LENGTH_MM
+            )
+            if out_of_bounds:
+                raise InvalidPlanError("pin position is outside the supported range")
+            continue
         length = parameters["length"]
         width = parameters["width"]
         thickness = parameters["thickness"]
@@ -229,6 +245,13 @@ def compile_plan(plan: DesignPlan, *, artifact_id: str) -> CompiledGeometry:
     solids = []
     for component in plan.components:
         parameters = component.parameters
+        if component.kind == "pin":
+            solids.append(
+                cq.Workplane("XY")
+                .cylinder(parameters["length"], parameters["radius"])
+                .translate((parameters["x"], parameters["y"], 0.0))
+            )
+            continue
         length = parameters["length"]
         width = parameters["width"]
         thickness = parameters["thickness"]
