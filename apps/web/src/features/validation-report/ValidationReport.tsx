@@ -27,6 +27,11 @@ export function ValidationReport({
         )
       : null) ?? candidates.at(-1);
   const evaluation = finalRecord?.evaluation ?? null;
+  const finalProgram =
+    programs.find((record) => record.evaluation?.status === "passed") ??
+    programs.at(-1) ??
+    null;
+  const programEvaluation = evaluation ? null : (finalProgram?.evaluation ?? null);
 
   return (
     <section className="panel">
@@ -149,6 +154,69 @@ export function ValidationReport({
               </ul>
             </details>
           ) : null}
+        </>
+      ) : programEvaluation ? (
+        <>
+          <div className={`status-line status-${programEvaluation.status}`}>
+            <span className="status-dot" />
+            <strong>{programEvaluation.status.toUpperCase()}</strong>
+            <span>{finalProgram?.program.program_id}</span>
+          </div>
+          <table className="metrics-table">
+            <tbody>
+              <tr>
+                <th>Measured envelope</th>
+                <td>
+                  {programEvaluation.metrics.width_mm.toFixed(1)} ×{" "}
+                  {programEvaluation.metrics.height_mm.toFixed(1)} ×{" "}
+                  {programEvaluation.metrics.thickness_mm.toFixed(1)} mm
+                </td>
+              </tr>
+              <tr>
+                <th>Volume</th>
+                <td>{(programEvaluation.metrics.volume_mm3 / 1000).toFixed(2)} cm³</td>
+              </tr>
+              <tr>
+                <th>Parts</th>
+                <td>{programEvaluation.metrics.part_count ?? 1}</td>
+              </tr>
+              {programEvaluation.metrics.joint_count ? (
+                <tr>
+                  <th>Joints</th>
+                  <td>{programEvaluation.metrics.joint_count}</td>
+                </tr>
+              ) : null}
+              <tr>
+                <th>Mesh valid</th>
+                <td>{programEvaluation.metrics.mesh_valid ? "yes" : "no"}</td>
+              </tr>
+              <tr>
+                <th>Deterministic</th>
+                <td>{programEvaluation.metrics.deterministic ? "yes" : "no"}</td>
+              </tr>
+              <tr>
+                <th>Execution</th>
+                <td>{programEvaluation.metrics.program_status}</td>
+              </tr>
+            </tbody>
+          </table>
+          {programEvaluation.failed_checks.length > 0 ? (
+            <ul className="chip-list">
+              {programEvaluation.failed_checks.map((check) => (
+                <li key={check} className="chip chip-failed">
+                  {check}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {programEvaluation.diagnostic_notes.length > 0 ? (
+            <ul className="failure-list">
+              {programEvaluation.diagnostic_notes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          ) : null}
+          <p className="version-note">Evaluator {programEvaluation.evaluator_version}</p>
         </>
       ) : (
         <p className="empty-state">

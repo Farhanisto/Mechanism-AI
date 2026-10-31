@@ -1,147 +1,32 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import { RunStatusPanel } from "./components/RunStatusPanel";
-import { CandidateHistory } from "./features/candidate-history/CandidateHistory";
-import { ClarificationForm } from "./features/clarifications/ClarificationForm";
-import { DesignInputForm } from "./features/design-input/DesignInputForm";
-import { EvidenceArtifacts } from "./features/evidence/EvidenceArtifacts";
-import { ProgramsPanel } from "./features/programs/ProgramsPanel";
-import { RequirementsPanel } from "./features/requirements/RequirementsPanel";
-import { ValidationReport } from "./features/validation-report/ValidationReport";
-import { Workspace3D } from "./features/workspace/Workspace3D";
-import { artifactUrl } from "./lib/api";
-import { useDesignRun } from "./lib/useDesignRun";
+import { LandingPage } from "./landing/LandingPage";
+import { WorkspaceApp } from "./WorkspaceApp";
+
+type Route = "landing" | "workspace";
+
+function currentRoute(): Route {
+  return window.location.hash.startsWith("#/app") ? "workspace" : "landing";
+}
 
 export function App() {
-  const {
-    run,
-    events,
-    candidates,
-    briefArtifact,
-    partBrief,
-    programs,
-    simulation,
-    isStarting,
-    streamState,
-    error,
-    start,
-    cancel,
-    answerClarifications,
-  } = useDesignRun();
-  const [expert, setExpert] = useState(false);
+  const [route, setRoute] = useState<Route>(currentRoute);
 
-  const finalRecord =
-    (run?.final_candidate_id
-      ? candidates.find(
-          (record) => record.candidate.candidate_id === run.final_candidate_id,
-        )
-      : null) ?? candidates.at(-1);
-  const metrics = finalRecord?.evaluation?.metrics ?? null;
-  const bestProgram =
-    programs.find((record) => record.evaluation?.status === "passed") ??
-    programs.at(-1) ??
-    null;
-  const geometryVerified = Boolean(
-    finalRecord?.evaluation?.status === "passed" ||
-      bestProgram?.evaluation?.status === "passed",
-  );
-  const geometryArtifactId =
-    finalRecord?.candidate.geometry_artifact_id ??
-    bestProgram?.geometry_artifact_id ??
-    null;
-  const geometryUrl =
-    run && geometryArtifactId ? artifactUrl(run.run_id, geometryArtifactId) : null;
+  useEffect(() => {
+    const onHashChange = () => {
+      const next = currentRoute();
+      setRoute(next);
+      if (next === "workspace" || window.location.hash === "#/") {
+        try {
+          window.scrollTo({ top: 0, behavior: "auto" });
+        } catch {
+          window.scrollTo(0, 0);
+        }
+      }
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
-  return (
-    <main className="app app-wide">
-      <header className="app-header">
-        <div className="header-row">
-          <div>
-            <p className="eyebrow">Mechanism AI</p>
-            <h1>Constraint-driven four-bar linkage design</h1>
-          </div>
-          <div className="view-mode" role="group" aria-label="View mode">
-            <button
-              type="button"
-              className={expert ? "" : "active"}
-              aria-pressed={!expert}
-              onClick={() => setExpert(false)}
-            >
-              Beginner
-            </button>
-            <button
-              type="button"
-              className={expert ? "active" : ""}
-              aria-pressed={expert}
-              onClick={() => setExpert(true)}
-            >
-              Expert
-            </button>
-          </div>
-        </div>
-        <p className="lede">
-          The AI proposes candidates. An independent evaluator decides whether they pass, using
-          fixed criteria and saved evidence. Beginner and Expert views share the same engine and
-          evaluation rules.
-        </p>
-      </header>
-
-      {error ? <p className="banner banner-error">{error}</p> : null}
-
-      <div className="workspace-layout">
-        <div className="workspace-column">
-          <DesignInputForm onSubmit={start} disabled={isStarting} />
-          {run ? (
-            <ClarificationForm
-              run={run}
-              onSubmit={(answers) => void answerClarifications(answers)}
-            />
-          ) : null}
-          <RequirementsPanel
-            briefArtifact={briefArtifact}
-            partBrief={partBrief}
-            capabilityId={run?.capability_id ?? null}
-            expert={expert}
-          />
-        </div>
-
-        <div className="workspace-column workspace-column-center">
-          <Workspace3D
-            geometryUrl={geometryUrl}
-            geometryArtifactId={geometryArtifactId}
-            verified={geometryVerified}
-            attemptCount={programs.length}
-            simulation={simulation}
-            brief={briefArtifact}
-            metrics={metrics}
-          />
-          <RunStatusPanel
-            run={run}
-            events={events}
-            streamState={streamState}
-            onCancel={() => void cancel()}
-            expert={expert}
-          />
-        </div>
-
-        <div className="workspace-column">
-          <ValidationReport
-            run={run}
-            candidates={candidates}
-            programs={programs}
-            simulation={simulation}
-            expert={expert}
-          />
-          <CandidateHistory candidates={candidates} />
-          <ProgramsPanel runId={run?.run_id ?? null} programs={programs} expert={expert} />
-          <EvidenceArtifacts run={run} candidates={candidates} expert={expert} />
-        </div>
-      </div>
-
-      <footer className="app-footer">
-        <span>Hackathon MVP scope: planar four-bar linkages, kinematic and geometric checks only.</span>
-        <span>Passing checks do not certify manufacturability or physical safety.</span>
-      </footer>
-    </main>
-  );
+  return route === "workspace" ? <WorkspaceApp /> : <LandingPage />;
 }

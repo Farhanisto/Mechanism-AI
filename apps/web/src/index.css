@@ -50,6 +50,20 @@ select {
   color: inherit;
 }
 
+.workspace-home {
+  align-self: flex-start;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: color 160ms ease;
+}
+
+.workspace-home:hover {
+  color: var(--accent);
+}
+
 .app {
   width: min(1180px, 100% - 48px);
   margin: 0 auto;

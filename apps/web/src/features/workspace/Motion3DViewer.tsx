@@ -47,7 +47,7 @@ export function Motion3DViewer({ simulation }: Motion3DViewerProps) {
     }
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf8f9fb);
+    scene.background = new THREE.Color(0x080d1a);
     const camera = new THREE.PerspectiveCamera(45, 1, 0.5, 20000);
     let renderer: THREE.WebGLRenderer;
     try {
@@ -82,7 +82,7 @@ export function Motion3DViewer({ simulation }: Motion3DViewerProps) {
     const size = bounds.getSize(new THREE.Vector3());
     const extent = Math.max(size.x, size.y, 1);
 
-    const grid = new THREE.GridHelper(extent * 2.2, 22, 0xd7dde6, 0xe7ebf1);
+    const grid = new THREE.GridHelper(extent * 2.2, 22, 0x1e2b48, 0x131c30);
     grid.rotation.x = Math.PI / 2;
     grid.position.set(center.x, center.y, -LINK_THICKNESS_MM * 1.6);
     scene.add(grid);
@@ -98,7 +98,9 @@ export function Motion3DViewer({ simulation }: Motion3DViewerProps) {
       roughness: 0.6,
     });
     const jointMaterial = new THREE.MeshStandardMaterial({
-      color: 0x1b1f24,
+      color: 0xdff3ff,
+      emissive: 0x38bdf8,
+      emissiveIntensity: 0.6,
       metalness: 0.3,
       roughness: 0.35,
     });

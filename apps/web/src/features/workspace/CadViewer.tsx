@@ -31,7 +31,7 @@ export function CadViewer({ url }: CadViewerProps) {
     }
     setStatus("loading");
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf8f9fb);
+    scene.background = new THREE.Color(0x080d1a);
 
     const camera = new THREE.PerspectiveCamera(45, 1, 0.5, 20000);
     let renderer: THREE.WebGLRenderer;
