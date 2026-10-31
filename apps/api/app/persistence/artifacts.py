@@ -23,6 +23,18 @@ class ArtifactStore:
         self.metadata = metadata
         self._writes: dict[tuple[str, str], ArtifactManifestEntry] = {}
 
+    def hydrate(self) -> None:
+        """Reload the in-memory manifest from the persisted metadata store."""
+        if self.metadata is None:
+            return
+        for run_id, payload in self.metadata.load_artifact_entries():
+            self._writes[(run_id, str(payload["name"]))] = ArtifactManifestEntry(
+                name=str(payload["name"]),
+                sha256=str(payload["sha256"]),
+                size_bytes=int(payload["size_bytes"]),
+                written_at=str(payload["written_at"]),
+            )
+
     def run_dir(self, run_id: str) -> Path:
         if not _RUN_ID_PATTERN.fullmatch(run_id):
             raise ValueError(f"Invalid run id: {run_id!r}")

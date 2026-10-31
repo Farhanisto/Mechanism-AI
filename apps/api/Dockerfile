@@ -15,7 +15,13 @@ COPY apps/api/pyproject.toml apps/api/uv.lock ./
 RUN uv sync --frozen --no-dev --extra sim --extra cad
 
 COPY apps/api/app ./app
+COPY apps/api/docker-entrypoint.sh /app/apps/api/docker-entrypoint.sh
+RUN chmod +x /app/apps/api/docker-entrypoint.sh
 
-EXPOSE 8000
+ENV PORT=8000
 
-CMD ["uv", "run", "--frozen", "--no-dev", "--extra", "sim", "--extra", "cad", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 8000 8080
+
+# Railway injects PORT=8080 at runtime; locally this falls back to 8000.
+# The entrypoint binds IPv4 locally and IPv6 on Railway private networking.
+CMD ["/app/apps/api/docker-entrypoint.sh"]

@@ -1,0 +1,13 @@
+#!/bin/sh
+# Runs before 20-envsubst-on-templates.sh. Uses the resolver advertised by the
+# current network (Docker's 127.0.0.11 locally, Railway's private DNS in prod).
+set -eu
+
+resolver="$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf 2>/dev/null || true)"
+if [ -z "${resolver:-}" ]; then
+    resolver="127.0.0.11"
+fi
+case "${resolver}" in
+    *:*) resolver="[${resolver}]" ;;
+esac
+export DNS_RESOLVER="${resolver}"

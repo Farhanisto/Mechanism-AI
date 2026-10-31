@@ -1,0 +1,61 @@
+# Rendered at container start by the official nginx entrypoint (envsubst).
+# ${PORT}, ${API_UPSTREAM} and ${DNS_RESOLVER} are substituted; nginx
+# variables like $host and $api_upstream are left untouched.
+server {
+    listen ${PORT};
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Browsers share cookies across every localhost port, so a dev machine can
+    # accumulate headers larger than nginx's 8 kB default and get a 400/494.
+    client_header_buffer_size 32k;
+    large_client_header_buffers 8 64k;
+
+    # Resolve the API per request instead of caching its IP for the container's
+    # lifetime. Required on Railway because a redeployed API gets a new address.
+    resolver ${DNS_RESOLVER} valid=10s ipv6=on;
+    set $api_upstream http://${API_UPSTREAM};
+
+    location = /api/v1/design-runs {
+        limit_req zone=design_runs burst=4 nodelay;
+
+        proxy_pass $api_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $demo_client_ip;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+    }
+
+    location /api/ {
+        proxy_pass $api_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $demo_client_ip;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+    }
+
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+}

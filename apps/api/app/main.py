@@ -19,7 +19,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     metadata = MetadataStore(settings.artifacts_dir / "metadata.sqlite3")
     artifacts = ArtifactStore(settings.artifacts_dir, metadata=metadata)
+    artifacts.hydrate()
     store = RunStore(artifacts, metadata=metadata)
+    store.hydrate()
     events = EventBroker()
     meta_client = build_meta_client(settings)
     app.state.orchestrator = DesignRunOrchestrator(

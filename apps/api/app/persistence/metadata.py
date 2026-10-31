@@ -108,6 +108,30 @@ class MetadataStore:
         )
         self._connection.commit()
 
+    def load_runs(self) -> list[dict[str, object]]:
+        rows = self._connection.execute(
+            "SELECT payload FROM runs ORDER BY created_at, run_id"
+        ).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    def load_artifact_entries(self) -> list[tuple[str, dict[str, object]]]:
+        rows = self._connection.execute(
+            "SELECT run_id, name, sha256, size_bytes, written_at FROM artifacts "
+            "ORDER BY run_id, name"
+        ).fetchall()
+        return [
+            (
+                row[0],
+                {
+                    "name": row[1],
+                    "sha256": row[2],
+                    "size_bytes": row[3],
+                    "written_at": row[4],
+                },
+            )
+            for row in rows
+        ]
+
     def get_run(self, run_id: str) -> dict[str, object] | None:
         row = self._connection.execute(
             "SELECT payload FROM runs WHERE run_id = ?", (run_id,)

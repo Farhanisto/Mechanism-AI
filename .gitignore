@@ -229,3 +229,6 @@ MUJOCO_LOG.TXT
 # Local PRD documents
 Mechanism_AI_End_to_End_Architecture_and_Workflow.pdf
 prdmech.pdf
+
+# Railway deployment notes
+RAILWAY.md

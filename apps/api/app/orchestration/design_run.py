@@ -167,6 +167,33 @@ class RunStore:
         self._runs: dict[str, DesignRun] = {}
         self._candidates: dict[str, list[CandidateRecord]] = defaultdict(list)
 
+    def hydrate(self) -> None:
+        """Restore runs and candidates persisted in the metadata store.
+
+        Volumes can contain records written by older schema versions. Legacy or
+        corrupt entries are skipped with a warning so they never prevent startup.
+        """
+        if self._metadata is None:
+            return
+        logger = logging.getLogger(__name__)
+        for payload in self._metadata.load_runs():
+            try:
+                run = DesignRun.model_validate(payload)
+            except ValidationError:
+                logger.warning("Skipping unreadable persisted run record")
+                continue
+            self._runs[run.run_id] = run
+            records: list[CandidateRecord] = []
+            for item in self._metadata.list_candidate_payloads(run.run_id):
+                try:
+                    records.append(CandidateRecord.model_validate(item))
+                except ValidationError:
+                    logger.warning(
+                        "Skipping unreadable candidate record for run %s", run.run_id
+                    )
+            if records:
+                self._candidates[run.run_id] = records
+
     def create(self, run: DesignRun) -> DesignRun:
         self._runs[run.run_id] = run
         self._persist(run.run_id)

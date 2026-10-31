@@ -76,6 +76,7 @@ npm run dev
 Open <http://localhost:5173>. Vite proxies `/api` to the local API. Interactive API docs are at
 <http://localhost:8000/docs>.
 
+
 ## Docker
 
 ```bash
