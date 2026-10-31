@@ -48,6 +48,8 @@ function renderWorkspace(overrides: Partial<Parameters<typeof Workspace3D>[0]> =
     <Workspace3D
       geometryUrl={null}
       geometryArtifactId={null}
+      verified={false}
+      attemptCount={0}
       simulation={null}
       brief={null}
       metrics={null}
@@ -70,13 +72,14 @@ describe("Workspace3D", () => {
 
     fireEvent.click(screen.getByText("CAD"));
 
-    expect(screen.getByText(/No geometry artifact for this run/)).toBeTruthy();
+    expect(screen.getByText(/No geometry artifact was produced for this run/)).toBeTruthy();
   });
 
   it("mounts the viewer with the server artifact url", () => {
     renderWorkspace({
       geometryUrl: "http://localhost:8000/geometry_candidate_001.stl",
       geometryArtifactId: "geometry_candidate_001.stl",
+      verified: true,
     });
 
     expect(screen.getByTestId("cad-viewer").textContent).toContain(
@@ -101,6 +104,8 @@ describe("Workspace3D", () => {
       <Workspace3D
         geometryUrl="http://localhost:8000/geometry_program_001.stl"
         geometryArtifactId="geometry_program_001.stl"
+        verified={false}
+        attemptCount={3}
         simulation={null}
         brief={null}
         metrics={null}
@@ -118,6 +123,8 @@ describe("Workspace3D", () => {
       <Workspace3D
         geometryUrl="http://localhost:8000/geometry_program_001.stl"
         geometryArtifactId="geometry_program_001.stl"
+        verified={false}
+        attemptCount={3}
         simulation={null}
         brief={null}
         metrics={null}
@@ -126,6 +133,25 @@ describe("Workspace3D", () => {
 
     expect(screen.queryByTestId("cad-viewer")).toBeNull();
     expect(screen.getByText("computed state trace")).toBeTruthy();
+  });
+
+  it("labels an unverified best attempt instead of claiming verification", () => {
+    renderWorkspace({
+      geometryUrl: "http://localhost:8000/geometry_program_003.stl",
+      geometryArtifactId: "geometry_program_003.stl",
+      verified: false,
+      attemptCount: 3,
+    });
+
+    expect(screen.getByText("best attempt (not verified)")).toBeTruthy();
+  });
+
+  it("points at attempt errors when candidates ran but nothing compiled", () => {
+    renderWorkspace({ attemptCount: 3 });
+
+    fireEvent.click(screen.getByText("CAD"));
+
+    expect(screen.getByText(/Check the Programs panel/)).toBeTruthy();
   });
 
   it("marks concept mode as not available instead of faking an animation", () => {

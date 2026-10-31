@@ -227,10 +227,11 @@ export interface ProgramJoint {
   name: string;
   parent: string;
   child: string;
+  kind: "revolute" | "prismatic";
   origin: [number, number, number];
   axis: [number, number, number];
-  min_deg: number;
-  max_deg: number;
+  min_value: number;
+  max_value: number;
 }
 
 export interface BriefArtifact {

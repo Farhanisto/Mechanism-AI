@@ -94,6 +94,7 @@ def _brief_payload(case: dict[str, Any]) -> dict[str, Any]:
         "clarification_questions": [],
         "requirement_sources": [],
         "requested_checks": [],
+        "link_lengths": None,
         "link_width_mm": None,
         "link_thickness_mm": None,
         "pivot_hole_mm": None,

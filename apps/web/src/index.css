@@ -1036,6 +1036,13 @@ a.artifact-download {
   height: 100%;
 }
 
+.cad-views {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
 .cad-hint {
   margin: 6px 0 0;
   font-size: 11px;

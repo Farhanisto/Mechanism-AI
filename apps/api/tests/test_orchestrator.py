@@ -12,11 +12,21 @@ from app.cad.compiler import is_cad_available
 from app.evaluation.evaluator import evaluate_candidate
 from app.mechanism.kinematics import KinematicsError
 from app.mechanism.schemas import (
+    ClarificationQuestion,
     DesignRunCreateRequest,
     EvidenceBundle,
+    HardConstraints,
     NormalizedBrief,
+    PartBrief,
+    PartRequirements,
+    TargetMotion,
 )
-from app.orchestration.design_run import DesignRunOrchestrator, EventBroker, RunStore
+from app.orchestration.design_run import (
+    DesignRunOrchestrator,
+    EventBroker,
+    RunStore,
+    UnsupportedRequirementError,
+)
 from app.persistence.artifacts import ArtifactStore
 
 PROMPT = "Design a four-bar linkage with 100 mm of travel in a 200 mm footprint."
@@ -39,6 +49,7 @@ BRIEF_PAYLOAD: dict[str, Any] = {
     "clarification_questions": [],
     "requirement_sources": [],
     "requested_checks": [],
+    "link_lengths": None,
     "link_width_mm": None,
     "link_thickness_mm": None,
     "pivot_hole_mm": None,
@@ -379,6 +390,7 @@ BLOCKING_BRIEF_PAYLOAD: dict[str, Any] = {
         }
     ],
     "requested_checks": [],
+    "link_lengths": None,
     "link_width_mm": None,
     "link_thickness_mm": None,
     "pivot_hole_mm": None,
@@ -455,7 +467,9 @@ async def test_unsupported_answer_fails_the_run_honestly(tmp_path: Path) -> None
     assert orchestrator.store.list_candidates(run.run_id) == []
 
 
-async def test_invalid_clarification_answers_are_rejected(tmp_path: Path) -> None:
+async def test_unknown_or_missing_clarification_answers_are_rejected(
+    tmp_path: Path,
+) -> None:
     client = ScriptedMetaClient(
         candidate_payloads=[], brief_payload=BLOCKING_BRIEF_PAYLOAD
     )
@@ -467,12 +481,17 @@ async def test_invalid_clarification_answers_are_rejected(tmp_path: Path) -> Non
         orchestrator.submit_clarifications(run.run_id, {"nope": "1"})
     with pytest.raises(ValueError, match="Missing answers"):
         orchestrator.submit_clarifications(run.run_id, {})
-    with pytest.raises(ValueError, match="number"):
-        orchestrator.submit_clarifications(run.run_id, {"q_travel": "very far"})
 
-    stored_run = orchestrator.store.get(run.run_id)
-    assert stored_run is not None
-    assert stored_run.status.value == "awaiting_clarification"
+    # Free-text answers are accepted and recorded as documented assumptions.
+    updated = orchestrator.submit_clarifications(
+        run.run_id, {"q_travel": "very far, roughly the width of the bench"}
+    )
+    assert updated.pending_clarifications == []
+    brief = orchestrator.artifacts.read_json(run.run_id, "brief.json")["brief"]
+    assert any(
+        "roughly the width of the bench" in assumption
+        for assumption in brief["assumptions"]
+    )
 
 
 async def test_unsupported_prompt_completes_without_candidates(tmp_path: Path) -> None:
@@ -542,3 +561,138 @@ async def test_unresolved_required_check_blocks_a_pass(tmp_path: Path) -> None:
 
     event_names = await replay_events(broker, run.run_id)
     assert event_names[-1] == "run_completed"
+
+
+def _part_brief() -> PartBrief:
+    return PartBrief(
+        part=PartRequirements(
+            description="gripper mounting plate",
+            max_width_mm=100.0,
+            max_height_mm=80.0,
+            max_thickness_mm=8.0,
+        )
+    )
+
+
+def test_part_answer_extracts_measurements_from_free_text() -> None:
+    brief = _part_brief()
+    width_question = ClarificationQuestion(
+        question_id="q_width",
+        question="What overall width?",
+        field="max_width_mm",
+    )
+
+    updated = DesignRunOrchestrator._apply_part_answer(
+        brief,
+        width_question,
+        "Overall gripper width: 120 mm (maximum), fingers move 30 mm each",
+    )
+    assert updated.part.max_width_mm == 120.0
+
+    thickness_question = ClarificationQuestion(
+        question_id="q_thickness",
+        question="Plate thickness?",
+        field="max_thickness_mm",
+    )
+    from_plate = DesignRunOrchestrator._apply_part_answer(
+        brief, thickness_question, "Robot mounting plate: 100 x 80 x 8 mm"
+    )
+    assert from_plate.part.max_thickness_mm == 8.0
+
+
+def test_part_answer_keeps_free_text_without_a_measurement() -> None:
+    brief = _part_brief()
+    question = ClarificationQuestion(
+        question_id="q_width",
+        question="What overall width?",
+        field="max_width_mm",
+    )
+
+    updated = DesignRunOrchestrator._apply_part_answer(
+        brief, question, "as wide as the gripper needs to be"
+    )
+
+    assert updated.part.max_width_mm == 100.0
+    assert any(
+        "as wide as the gripper needs to be" in assumption
+        for assumption in updated.assumptions
+    )
+
+
+def test_part_scope_answer_accepts_free_text_and_fails_closed_on_no() -> None:
+    brief = _part_brief()
+    question = ClarificationQuestion(
+        question_id="q_scope",
+        question="Continue with geometric checks only?",
+        field="verification_scope.kinematic_only",
+    )
+
+    accepted = DesignRunOrchestrator._apply_part_answer(
+        brief, question, "yes, geometric checks are plenty for this plate"
+    )
+    assert any("geometric checks only" in item for item in accepted.assumptions)
+
+    with pytest.raises(UnsupportedRequirementError):
+        DesignRunOrchestrator._apply_part_answer(
+            brief, question, "no, I need structural strength analysis"
+        )
+
+
+def test_four_bar_answer_accepts_free_text_for_numeric_fields() -> None:
+    brief = NormalizedBrief(
+        target_motion=TargetMotion(travel_distance=50.0),
+        constraints=HardConstraints(max_footprint=200.0),
+    )
+    question = ClarificationQuestion(
+        question_id="q_travel",
+        question="How far should the output travel?",
+        field="target_motion.travel_distance",
+    )
+
+    updated = DesignRunOrchestrator._apply_answer(
+        brief, question, "about 100 mm please, maybe a little more"
+    )
+    assert updated.target_motion.travel_distance == 100.0
+
+    free_text = DesignRunOrchestrator._apply_answer(
+        brief, question, "depends on the wiper geometry"
+    )
+    assert free_text.target_motion.travel_distance == 50.0
+    assert any(
+        "depends on the wiper geometry" in assumption
+        for assumption in free_text.assumptions
+    )
+
+
+async def test_explicit_link_lengths_override_model_parameters(tmp_path: Path) -> None:
+    brief_payload = {
+        **BRIEF_PAYLOAD,
+        "link_lengths": {
+            "ground_mm": 120.0,
+            "crank_mm": 40.0,
+            "coupler_mm": 100.0,
+            "rocker_mm": 90.0,
+        },
+    }
+    client = ScriptedMetaClient(
+        candidate_payloads=[candidate_payload(95, 35, 135, 100)],
+        brief_payload=brief_payload,
+    )
+    orchestrator, _ = make_orchestrator(tmp_path, client)
+    run = orchestrator.create_run(
+        DesignRunCreateRequest(prompt=PROMPT, options={"max_candidates": 1})
+    )
+
+    await orchestrator.execute(run.run_id)
+
+    candidates = orchestrator.store.list_candidates(run.run_id)
+    parameters = candidates[0].candidate.parameters
+    assert parameters.ground_length == 120.0
+    assert parameters.crank_length == 40.0
+    assert parameters.coupler_length == 100.0
+    assert parameters.rocker_length == 90.0
+
+    simulation = orchestrator.artifacts.read_json(
+        run.run_id, "simulation_candidate_001.json"
+    )
+    assert simulation["samples"]

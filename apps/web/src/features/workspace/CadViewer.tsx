@@ -7,11 +7,22 @@ interface CadViewerProps {
   url: string;
 }
 
+type CadView = "isometric" | "top" | "side" | "front";
+
+const CAD_VIEWS: CadView[] = ["isometric", "top", "side", "front"];
+
 export function CadViewer({ url }: CadViewerProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
+  const frameViewRef = useRef<((view: CadView) => void) | null>(null);
+  const [view, setView] = useState<CadView>("isometric");
   const [status, setStatus] = useState<"loading" | "ready" | "error" | "unavailable">(
     "loading",
   );
+
+  const selectView = (next: CadView) => {
+    setView(next);
+    frameViewRef.current?.(next);
+  };
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -72,8 +83,20 @@ export function CadViewer({ url }: CadViewerProps) {
           const maxDimension = Math.max(size.x, size.y, size.z, 1);
           mesh.position.sub(center);
           camera.near = maxDimension / 100;
-          camera.far = maxDimension * 100;
-          camera.position.set(maxDimension * 1.2, maxDimension * 0.9, maxDimension * 1.4);
+          camera.far = maxDimension * 200;
+          const frameFor = (preset: CadView) => {
+            const positions: Record<CadView, THREE.Vector3> = {
+              isometric: new THREE.Vector3(1.2, 0.9, 1.4).multiplyScalar(maxDimension),
+              top: new THREE.Vector3(0, 0, 2.2).multiplyScalar(maxDimension),
+              side: new THREE.Vector3(0, -2.2, 0).multiplyScalar(maxDimension),
+              front: new THREE.Vector3(2.2, 0, 0).multiplyScalar(maxDimension),
+            };
+            camera.position.copy(positions[preset]);
+            controls.target.set(0, 0, 0);
+            controls.update();
+          };
+          frameViewRef.current = frameFor;
+          frameFor("isometric");
           camera.updateProjectionMatrix();
         }
         scene.add(mesh);
@@ -110,6 +133,7 @@ export function CadViewer({ url }: CadViewerProps) {
 
     return () => {
       disposed = true;
+      frameViewRef.current = null;
       window.cancelAnimationFrame(frame);
       observer.disconnect();
       controls.dispose();
@@ -126,6 +150,19 @@ export function CadViewer({ url }: CadViewerProps) {
 
   return (
     <div className="cad-viewer">
+      <div className="cad-views" role="group" aria-label="Camera view">
+        {CAD_VIEWS.map((preset) => (
+          <button
+            key={preset}
+            type="button"
+            className={`mode-tab${view === preset ? " mode-tab-active" : ""}`}
+            aria-pressed={view === preset}
+            onClick={() => selectView(preset)}
+          >
+            {preset.charAt(0).toUpperCase() + preset.slice(1)}
+          </button>
+        ))}
+      </div>
       <div
         ref={mountRef}
         className="cad-viewer-canvas"

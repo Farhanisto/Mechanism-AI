@@ -54,6 +54,23 @@ def build():
     return {"parts": parts}
 """
 
+LARGE_BRIDGE_PROGRAM = """import cadquery as cq
+
+
+def build():
+    parts = {}
+    parts["deck"] = cq.Workplane("XY").box(30000, 4000, 200)
+    for side, label in ((-1, "left"), (1, "right")):
+        y = side * 1900
+        parts[f"tower_{label}"] = (
+            cq.Workplane("XY").box(400, 400, 6000).translate((0, y, 3000))
+        )
+        parts[f"cable_{label}"] = (
+            cq.Workplane("XY").box(30000, 60, 60).translate((0, y, 5500))
+        )
+    return {"parts": parts}
+"""
+
 TINY_PROGRAM = """import cadquery as cq
 
 
@@ -65,6 +82,16 @@ def build():
         )
     return {"parts": parts}
 """
+
+SUSPENSION_PROMPT = (
+    "Design a small suspension bridge with the following specifications:\n\n"
+    "- Overall length: 30,000 mm\n- Deck width: 4,000 mm\n"
+    "- Two main support towers, 6,000 mm high\n- Two main suspension cables\n"
+    "- Vertical suspension hangers spaced every 1,500 mm\n- Anchor blocks at both ends\n"
+    "- Guardrails on both sides\n\n"
+    "Generate a complete 3D CAD assembly with separate components for towers, cables, "
+    "hangers, deck, anchorages, and railings. Include top, side, and isometric views."
+)
 
 BRIEF = PartBrief(
     part=PartRequirements(
@@ -109,6 +136,8 @@ def brief_payload() -> dict[str, Any]:
         "assumptions": [],
         "unknowns": [],
         "unsupported_requirements": ["load capacity", "deflection"],
+        "required_components": ["deck"],
+        "required_motion": "none",
         "clarification_questions": [],
         "requirement_sources": [],
     }
@@ -125,14 +154,15 @@ def program_payload(source: str) -> dict[str, Any]:
     }
 
 
-def execution(source: str):
+def execution(source: str, *, width: float = 900.0, height: float = 180.0,
+              thickness: float = 200.0):
     return run_design_program(
         DesignProgram(
             program_id="program_001",
             capability_id="structural_frame",
             source=source,
             expected_bbox=ExpectedBoundingBox(
-                width_mm=900, height_mm=180, thickness_mm=200
+                width_mm=width, height_mm=height, thickness_mm=thickness
             ),
         )
     )
@@ -182,6 +212,86 @@ def test_structure_evaluator_rejects_a_tiny_model() -> None:
     assert evaluation.status.value == "failed"
     assert "span_matches_envelope" in evaluation.failed_checks
     assert any("requested span" in note for note in evaluation.diagnostic_notes)
+
+
+def test_part_requirements_accepts_large_envelopes() -> None:
+    from pydantic import ValidationError
+
+    requirements = PartRequirements(
+        description="Suspension bridge",
+        max_width_mm=30_000.0,
+        max_height_mm=4_000.0,
+        max_thickness_mm=6_000.0,
+    )
+
+    assert requirements.max_width_mm == 30_000.0
+    with pytest.raises(ValidationError):
+        PartRequirements(
+            description="Too large",
+            max_width_mm=200_000.0,
+            max_height_mm=4_000.0,
+            max_thickness_mm=6_000.0,
+        )
+
+
+def test_structure_dimensions_are_extracted_from_the_request() -> None:
+    from app.ai.part_parser import extract_structure_dimensions
+
+    dimensions = extract_structure_dimensions(SUSPENSION_PROMPT)
+
+    assert dimensions == {"length_mm": 30_000.0, "width_mm": 4_000.0, "height_mm": 6_000.0}
+
+
+async def test_structure_brief_uses_stated_dimensions() -> None:
+    from app.ai.part_parser import parse_part_requirements
+
+    payload = brief_payload()
+    payload.update(max_width_mm=300.0, max_height_mm=4000.0, max_thickness_mm=600.0)
+    client = ScriptedClient([payload])
+
+    result = await parse_part_requirements(SUSPENSION_PROMPT, client=client, structure=True)
+
+    assert result.brief is not None
+    assert result.brief.part.max_width_mm == 30_000.0
+    assert result.brief.part.max_height_mm == 4_000.0
+    assert result.brief.part.max_thickness_mm == 6_000.0
+    assert any("Overall dimensions taken from the request" in a for a in result.brief.assumptions)
+
+
+async def test_inconsistent_refusal_is_retried_once() -> None:
+    from app.ai.part_parser import parse_part_requirements
+
+    refusal = brief_payload()
+    refusal.update(
+        supported=False,
+        reason="Request represents a static multi-part structural frame suitable for modeling.",
+    )
+    client = ScriptedClient([refusal, brief_payload()])
+
+    result = await parse_part_requirements(SUSPENSION_PROMPT, client=client, structure=True)
+
+    assert result.brief is not None
+    assert client.payloads == []
+
+
+def test_structure_evaluator_passes_a_large_span_frame() -> None:
+    bridge_brief = PartBrief(
+        part=PartRequirements(
+            description="Suspension bridge",
+            max_width_mm=30_000.0,
+            max_height_mm=4_000.0,
+            max_thickness_mm=6_000.0,
+        )
+    )
+    evaluation = evaluate_part(
+        bridge_brief,
+        execution(LARGE_BRIDGE_PROGRAM, width=30_000.0, height=4_000.0, thickness=6_000.0),
+        program_id="program_001",
+        deterministic=True,
+        require_structure=True,
+    )
+
+    assert evaluation.status.value == "passed", evaluation.diagnostic_notes
 
 
 def test_structure_evaluator_does_not_require_joints() -> None:

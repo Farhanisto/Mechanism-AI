@@ -140,15 +140,17 @@ def main() -> int:
             raw_parts = {"part": built}
             raw_joints = []
 
-        if len(raw_parts) > 80:
-            raise ValueError("the assembly exceeds the part budget (max 80)")
+        if len(raw_parts) > 200:
+            raise ValueError("the assembly exceeds the part budget (max 200)")
         if len(raw_joints) > 6:
             raise ValueError("the assembly exceeds the joint budget (max 6)")
 
         parts = {}
         for name, value in raw_parts.items():
-            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,32}", name):
-                raise ValueError(f"invalid part name {name!r}")
+            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,64}", name):
+                raise ValueError(
+                    f"invalid part name {name!r}: use 1-64 letters, digits or underscores"
+                )
             parts[name] = _shape(value, f"part {name!r}")
 
         joints = []
@@ -158,8 +160,10 @@ def main() -> int:
             name = item.get("name")
             parent = item.get("parent")
             child = item.get("child")
-            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,32}", name):
-                raise ValueError(f"invalid joint name {name!r}")
+            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,64}", name):
+                raise ValueError(
+                    f"invalid joint name {name!r}: use 1-64 letters, digits or underscores"
+                )
             if parent not in parts or child not in parts:
                 raise ValueError(f"joint {name!r} references unknown parts")
             if parent == child:
@@ -167,15 +171,25 @@ def main() -> int:
             axis = _vector(item.get("axis"), (0.0, 0.0, 1.0))
             if math.sqrt(sum(component * component for component in axis)) < 1e-9:
                 raise ValueError(f"joint {name!r} needs a non-zero axis")
+            kind = item.get("kind", "revolute")
+            if kind not in ("revolute", "prismatic"):
+                raise ValueError(f"joint {name!r} has an unsupported kind {kind!r}")
+            min_value = float(item.get("min_value", -180.0))
+            max_value = float(item.get("max_value", 180.0))
+            if not math.isfinite(min_value) or not math.isfinite(max_value):
+                raise ValueError(f"joint {name!r} limits are not finite")
+            if min_value > max_value:
+                raise ValueError(f"joint {name!r} limits are inverted")
             joints.append(
                 {
                     "name": name,
                     "parent": parent,
                     "child": child,
+                    "kind": kind,
                     "origin": _vector(item.get("origin"), (0.0, 0.0, 0.0)),
                     "axis": axis,
-                    "min_deg": float(item.get("min_deg", -180.0)),
-                    "max_deg": float(item.get("max_deg", 180.0)),
+                    "min_value": min_value,
+                    "max_value": max_value,
                 }
             )
 

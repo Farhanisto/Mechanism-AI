@@ -41,6 +41,10 @@ export function App() {
     programs.find((record) => record.evaluation?.status === "passed") ??
     programs.at(-1) ??
     null;
+  const geometryVerified = Boolean(
+    finalRecord?.evaluation?.status === "passed" ||
+      bestProgram?.evaluation?.status === "passed",
+  );
   const geometryArtifactId =
     finalRecord?.candidate.geometry_artifact_id ??
     bestProgram?.geometry_artifact_id ??
@@ -105,6 +109,8 @@ export function App() {
           <Workspace3D
             geometryUrl={geometryUrl}
             geometryArtifactId={geometryArtifactId}
+            verified={geometryVerified}
+            attemptCount={programs.length}
             simulation={simulation}
             brief={briefArtifact}
             metrics={metrics}
@@ -122,6 +128,7 @@ export function App() {
           <ValidationReport
             run={run}
             candidates={candidates}
+            programs={programs}
             simulation={simulation}
             expert={expert}
           />

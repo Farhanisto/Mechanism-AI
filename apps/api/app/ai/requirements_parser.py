@@ -8,6 +8,7 @@ from app.capabilities.router import detected_demand_categories
 from app.mechanism.schemas import (
     ClarificationQuestion,
     HardConstraints,
+    LinkLengths,
     MechanismType,
     NormalizedBrief,
     RequirementSource,
@@ -24,7 +25,9 @@ missing in unknowns, ask a blocking clarification question only when an unknown
 materially changes the design, and list required checks beyond the standard set
 in requested_checks. Capture component CAD details when the prompt states them:
 link width, link thickness and pivot hole diameter in millimetres, and whether
-cylindrical pins should be included; use null/false when not stated. Do not
+cylindrical pins should be included; use null/false when not stated. When the prompt
+states explicit link lengths for the ground link, crank, coupler or rocker, record them in
+link_lengths; otherwise use null. Do not
 invent constraints that the prompt does not state; use the documented defaults
 only when a critical value is missing."""
 
@@ -80,6 +83,15 @@ class RequirementSourceProposal(BaseModel):
     source: Literal["user_provided", "ai_proposed", "default_assumption"]
 
 
+class LinkLengthsProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ground_mm: float = Field(gt=0, le=10_000)
+    crank_mm: float = Field(gt=0, le=10_000)
+    coupler_mm: float = Field(gt=0, le=10_000)
+    rocker_mm: float = Field(gt=0, le=10_000)
+
+
 class BriefProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -92,6 +104,7 @@ class BriefProposal(BaseModel):
     clarification_questions: list[ClarificationQuestionProposal]
     requirement_sources: list[RequirementSourceProposal]
     requested_checks: list[str]
+    link_lengths: LinkLengthsProposal | None
     link_width_mm: float | None
     link_thickness_mm: float | None
     pivot_hole_mm: float | None
@@ -163,6 +176,35 @@ def _with_standard_assumptions(brief: NormalizedBrief) -> NormalizedBrief:
     return brief.model_copy(update={"assumptions": assumptions})
 
 
+_LINK_LABELS = {
+    "ground_mm": r"ground(?:\s+link)?",
+    "crank_mm": r"crank",
+    "coupler_mm": r"coupler",
+    "rocker_mm": r"rocker",
+}
+
+
+def extract_link_lengths(prompt: str) -> dict[str, float] | None:
+    """Extract explicit four-bar link lengths when all four are stated.
+
+    Handles both "a 120 mm ground link" and "ground link (120 mm)" phrasings.
+    """
+    lengths: dict[str, float] = {}
+    for name, label in _LINK_LABELS.items():
+        before = re.compile(
+            rf"(\d+(?:\.\d+)?)\s*mm\s*(?:[A-Za-z-]+\s+){{0,2}}?{label}",
+            re.IGNORECASE,
+        )
+        after = re.compile(
+            rf"{label}[^0-9]{{0,20}}?(\d+(?:\.\d+)?)\s*mm", re.IGNORECASE
+        )
+        match = before.search(prompt) or after.search(prompt)
+        if match is None:
+            return None
+        lengths[name] = float(match.group(1))
+    return lengths
+
+
 def _extract_spec(pattern: re.Pattern[str], prompt: str) -> float | None:
     match = pattern.search(prompt)
     return float(match.group(1)) if match else None
@@ -171,7 +213,29 @@ def _extract_spec(pattern: re.Pattern[str], prompt: str) -> float | None:
 def apply_prompt_cad_specs(brief: NormalizedBrief, prompt: str) -> NormalizedBrief:
     """Fill component CAD specs the model left unset with explicit prompt values."""
     updates: dict[str, object] = {}
+    original_sources = dict(brief.requirement_sources)
     sources = dict(brief.requirement_sources)
+    if brief.link_lengths is None:
+        extracted = extract_link_lengths(prompt)
+        if extracted is not None:
+            updates["link_lengths"] = LinkLengths(**extracted)
+            sources["link_lengths"] = RequirementSource.USER_PROVIDED
+    used_positions: set[int] = set()
+    if _number_near(
+        prompt, ("travel", "movement", "stroke", "displacement"),
+        default=0.0, used_positions=used_positions,
+    )[1]:
+        sources["target_motion.travel_distance"] = RequirementSource.USER_PROVIDED
+    if _number_near(
+        prompt, ("tolerance", "accuracy"),
+        default=0.0, used_positions=used_positions,
+    )[1]:
+        sources["target_motion.trajectory_tolerance"] = RequirementSource.USER_PROVIDED
+    if _number_near(
+        prompt, ("footprint", "envelope", "fits within", "package"),
+        default=0.0, used_positions=used_positions,
+    )[1]:
+        sources["constraints.max_footprint"] = RequirementSource.USER_PROVIDED
     if brief.link_thickness_mm is None:
         value = _extract_spec(_MM_THICKNESS_PATTERN, prompt)
         if value is not None:
@@ -190,9 +254,10 @@ def apply_prompt_cad_specs(brief: NormalizedBrief, prompt: str) -> NormalizedBri
     if not brief.include_pins and re.search(r"\bpins?\b", prompt, re.IGNORECASE):
         updates["include_pins"] = True
         sources["include_pins"] = RequirementSource.USER_PROVIDED
+    if sources != original_sources:
+        updates["requirement_sources"] = sources
     if not updates:
         return brief
-    updates["requirement_sources"] = sources
     return brief.model_copy(update=updates)
 
 
@@ -243,6 +308,7 @@ def default_brief_from_prompt(prompt: str) -> NormalizedBrief:
     pivot_hole = _extract_spec(_MM_HOLE_PATTERN, prompt)
     link_width = _extract_spec(_MM_WIDTH_PATTERN, prompt)
     include_pins = bool(re.search(r"\bpins?\b", prompt, re.IGNORECASE))
+    extracted_lengths = extract_link_lengths(prompt)
 
     assumptions = [
         "Near-horizontal target interpreted as a straight level output path.",
@@ -316,6 +382,11 @@ def default_brief_from_prompt(prompt: str) -> NormalizedBrief:
             link_thickness_mm=link_thickness,
             pivot_hole_mm=pivot_hole,
             include_pins=include_pins,
+            link_lengths=(
+                LinkLengths(**extracted_lengths)
+                if extracted_lengths is not None
+                else None
+            ),
             clarification_questions=policy_clarification_questions(prompt),
             requirement_sources=requirement_sources,
         )
@@ -349,6 +420,11 @@ async def parse_requirements(
                 item.field: item.source for item in proposal.requirement_sources
             },
             "requested_checks": proposal.requested_checks,
+            "link_lengths": (
+                proposal.link_lengths.model_dump()
+                if proposal.link_lengths is not None
+                else None
+            ),
             "link_width_mm": proposal.link_width_mm,
             "link_thickness_mm": proposal.link_thickness_mm,
             "pivot_hole_mm": proposal.pivot_hole_mm,

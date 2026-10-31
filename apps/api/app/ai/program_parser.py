@@ -28,6 +28,20 @@ Rules for the program:
 - Produce one solid part that fits inside the requested bounding envelope.
 - Keep loops bounded and primitives simple (box, cylinder, extrude, cut, union, fillet).
 
+Feature idioms and common pitfalls:
+- Cut a slot through a plate with a closed sketch:
+  plate.cut(cq.Workplane("XY").slot2D(50, 12).extrude(thickness)); keep the sketch
+  plane real and the extrusion overlapping the plate.
+- Round a plate's ends with
+  cq.Workplane("XY").rect(length, width).extrude(thickness).edges("|Z").fillet(radius);
+  fillet only after the solid exists.
+- Call faces()/edges()/fillet()/chamfer() only on a workplane that already contains a
+  solid. "Cannot find a solid on the stack or in the parent chain" means a cut, union,
+  fillet or selection ran on an empty workplane; build every feature as a complete solid
+  before combining it.
+- Combine solids explicitly (base = base.union(other) / base = base.cut(tool)) with solid
+  operands; never union with an empty Workplane.
+
 Declare the parameters you used and the bounding box you expect. Do not claim any checks
 passed; an independent evaluator measures the exported mesh."""
 
@@ -40,7 +54,8 @@ defines build() returning a dict:
       "parts": {"<part_name>": <cadquery Workplane|Shape|Compound>, ...},
       "joints": [
         {"name": "<joint_name>", "parent": "<part>", "child": "<part>",
-         "origin": [x, y, z], "axis": [x, y, z], "min_deg": -90, "max_deg": 90}
+         "kind": "revolute", "origin": [x, y, z], "axis": [x, y, z],
+         "min_value": -90, "max_value": 90}
       ]
     }
 
@@ -48,8 +63,14 @@ Rules:
 - Import only cadquery (optionally math). No other imports.
 - Deterministic geometry: no randomness, time, environment, network or filesystem access.
 - No dunder access, eval, exec, compile, open, os, sys, subprocess, pathlib or importlib.
-- 2 to 12 parts, at most 6 revolute joints, part names matching [A-Za-z0-9_].
-- Model the assembly in its assembled pose, inside the requested bounding envelope.
+- 2 to 12 parts, at most 6 joints, part names matching [A-Za-z0-9_].
+- Joints: kind is "revolute" (values in degrees) or "prismatic" (values in mm along the
+  axis). Sliding mechanisms such as gripper fingers use prismatic joints.
+- Name parts so the requested components are recognizable (for example mounting_plate,
+  finger_left, finger_right, rail_left, drive_block); component coverage is checked by name.
+- Model the assembly in its assembled pose inside the requested bounding envelope. The envelope
+  is the overall size of the whole assembly (all parts plus motion clearance); keep the overall
+  length, width and height within the brief's dimensions.
 - Every part must be a closed, non-empty solid in millimetres.
 - The two parts joined by each joint must not interpenetrate at any angle within its limits;
   an independent check rotates the child part about the declared axis and detects penetrations
@@ -58,7 +79,23 @@ Rules:
   through the other leaf (for example shift each plate by at least its thickness plus 1 mm, or
   start the plates beyond the knuckle radius). Interleave knuckles along the pin with axial gaps,
   and keep the assembled state inside the requested envelope.
+- Name parts so the requested components are recognizable (for example mounting_plate,
+  finger_left, finger_right, rail_left, drive_block); component coverage is checked by name.
 - Keep loops bounded and primitives simple (box, cylinder, extrude, cut, union).
+
+Feature idioms and common pitfalls:
+- Cut a slot through a plate with a closed sketch:
+  plate.cut(cq.Workplane("XY").slot2D(50, 12).extrude(thickness)); keep the sketch
+  plane real and the extrusion overlapping the plate.
+- Round a plate's ends with
+  cq.Workplane("XY").rect(length, width).extrude(thickness).edges("|Z").fillet(radius);
+  fillet only after the solid exists.
+- Call faces()/edges()/fillet()/chamfer() only on a workplane that already contains a
+  solid. "Cannot find a solid on the stack or in the parent chain" means a cut, union,
+  fillet or selection ran on an empty workplane; build every feature as a complete solid
+  before combining it.
+- Combine solids explicitly (base = base.union(other) / base = base.cut(tool)) with solid
+  operands; never union with an empty Workplane.
 
 Do not claim any checks passed; an independent evaluator measures the exported parts."""
 
@@ -73,7 +110,7 @@ Joints are not needed for static structures. Rules:
 - Import only cadquery (optionally math). No other imports.
 - Deterministic geometry: no randomness, time, environment, network or filesystem access.
 - No dunder access, eval, exec, compile, open, os, sys, subprocess, pathlib or importlib.
-- 2 to 80 parts, part names matching [A-Za-z0-9_].
+- 2 to 200 parts, part names matching [A-Za-z0-9_].
 - Model the structure in its assembled pose and fit inside the requested envelope: the measured
   overall length, width and height (including connection plates and overhangs) must not exceed
   the brief's dimensions by more than 5%. The requested length and width are hard maximums:
@@ -85,7 +122,25 @@ Joints are not needed for static structures. Rules:
 - Every part must be a closed, non-empty solid in millimetres.
 - Connection plates, bolt holes and overlaps at joints are allowed; only closed solids, overall
   dimensions and determinism are verified. No structural analysis is performed.
+- Name parts so the requested components are recognizable (for example mounting_plate,
+  finger_left, finger_right, rail_left, drive_block); component coverage is checked by name.
+- Name parts so the requested members are recognizable (for example deck, chord_left,
+  brace_02, connection_plate_left); component coverage is checked by name.
 - Keep loops bounded and primitives simple (box, cylinder, extrude, cut, union).
+
+Feature idioms and common pitfalls:
+- Cut a slot through a plate with a closed sketch:
+  plate.cut(cq.Workplane("XY").slot2D(50, 12).extrude(thickness)); keep the sketch
+  plane real and the extrusion overlapping the plate.
+- Round a plate's ends with
+  cq.Workplane("XY").rect(length, width).extrude(thickness).edges("|Z").fillet(radius);
+  fillet only after the solid exists.
+- Call faces()/edges()/fillet()/chamfer() only on a workplane that already contains a
+  solid. "Cannot find a solid on the stack or in the parent chain" means a cut, union,
+  fillet or selection ran on an empty workplane; build every feature as a complete solid
+  before combining it.
+- Combine solids explicitly (base = base.union(other) / base = base.cut(tool)) with solid
+  operands; never union with an empty Workplane.
 
 Do not claim any checks passed; an independent evaluator measures the exported parts."""
 

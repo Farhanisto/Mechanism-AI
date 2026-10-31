@@ -245,3 +245,47 @@ def test_geometry_artifact_is_served_binary(client: TestClient) -> None:
     assert response.headers["content-type"].startswith("model/stl")
     assert response.headers["content-disposition"].startswith("attachment")
     assert len(response.content) > 84
+
+
+def test_clarification_accepts_free_text_answers(client: TestClient) -> None:
+    prompt = "Design a four-bar linkage with 100 mm of travel that can carry a heavy load."
+    run_id = client.post("/api/v1/design-runs", json={"prompt": prompt}).json()["run_id"]
+
+    run = client.get(f"/api/v1/design-runs/{run_id}").json()
+    assert run["status"] == "awaiting_clarification"
+    question_id = run["pending_clarifications"][0]["question_id"]
+
+    response = client.post(
+        f"/api/v1/design-runs/{run_id}/clarifications",
+        json={
+            "answers": {
+                question_id: "yes, geometric and kinematic checks are sufficient for now"
+            }
+        },
+    )
+
+    assert response.status_code == 202
+    run = client.get(f"/api/v1/design-runs/{run_id}").json()
+    assert run["status"] == "completed"
+
+
+def test_explicit_link_lengths_override_the_fallback_candidate(client: TestClient) -> None:
+    prompt = (
+        "Create a four-bar linkage with a 120 mm ground link, a 40 mm crank, "
+        "a 100 mm coupler, and a 90 mm rocker."
+    )
+    run_id = client.post("/api/v1/design-runs", json={"prompt": prompt}).json()["run_id"]
+
+    run = client.get(f"/api/v1/design-runs/{run_id}").json()
+    candidates = client.get(f"/api/v1/design-runs/{run_id}/candidates").json()
+
+    # No motion target was stated, so the defaulted travel target must not fail
+    # a correct build of the requested linkage.
+    assert run["no_pass"] is False
+    parameters = candidates[0]["candidate"]["parameters"]
+    assert parameters == {
+        "ground_length": 120.0,
+        "crank_length": 40.0,
+        "coupler_length": 100.0,
+        "rocker_length": 90.0,
+    }

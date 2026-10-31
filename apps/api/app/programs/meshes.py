@@ -35,20 +35,30 @@ def load_mesh(data: bytes) -> Any:
     return mesh
 
 
-def rotated_mesh(
+def transformed_mesh(
     data: bytes,
     *,
+    kind: str,
     axis: tuple[float, float, float],
     origin: tuple[float, float, float],
-    angle_deg: float,
+    value: float,
 ) -> Any:
+    """Rotate (revolute) or translate (prismatic) a part about/along a joint."""
     trimesh = _trimesh()
     mesh = load_mesh(data)
-    matrix = trimesh.transformations.rotation_matrix(
-        math.radians(angle_deg),
-        np.asarray(axis, dtype=float),
-        point=np.asarray(origin, dtype=float),
-    )
+    axis_vector = np.asarray(axis, dtype=float)
+    norm = float(np.linalg.norm(axis_vector))
+    if norm < 1e-9:
+        raise ValueError("joint axis must be non-zero")
+    unit_axis = axis_vector / norm
+    if kind == "prismatic":
+        matrix = trimesh.transformations.translation_matrix(unit_axis * value)
+    else:
+        matrix = trimesh.transformations.rotation_matrix(
+            math.radians(value),
+            unit_axis,
+            point=np.asarray(origin, dtype=float),
+        )
     mesh.apply_transform(matrix)
     return mesh
 
@@ -64,16 +74,23 @@ def meshes_interfere(
 
     first_mesh = load_mesh(first) if isinstance(first, bytes) else first
     second_mesh = load_mesh(second) if isinstance(second, bytes) else second
-    samples = first_mesh.triangles_center
-    if len(samples) > max_samples:
-        samples = samples[:: max(1, len(samples) // max_samples)]
-    if len(samples) == 0:
-        return False
-    inside = second_mesh.contains(samples)
-    if not inside.any():
-        return False
-    depths = ProximityQuery(second_mesh).signed_distance(samples[inside])
-    return bool((depths > min_depth_mm).any())
+    def _penetrates(source: Any, target: Any) -> bool:
+        samples = source.triangles_center
+        if len(samples) > max_samples:
+            samples = samples[:: max(1, len(samples) // max_samples)]
+        if len(samples) == 0:
+            return False
+        inside = target.contains(samples)
+        if not inside.any():
+            return False
+        depths = ProximityQuery(target).signed_distance(samples[inside])
+        return bool((depths > min_depth_mm).any())
+
+    # Sample both directions: a small part fully inside a larger one has no
+    # surface samples of the larger part inside the smaller one.
+    return _penetrates(first_mesh, second_mesh) or _penetrates(
+        second_mesh, first_mesh
+    )
 
 
 def articulation_clearance(
@@ -87,22 +104,24 @@ def articulation_clearance(
     child = parts.get(joint["child"])
     if parent is None or child is None:
         return False, ["joint references a part that was not produced"]
-    angles = {
-        float(joint.get("min_deg", -180.0)),
+    values = {
+        float(joint.get("min_value", -180.0)),
         0.0,
-        float(joint.get("max_deg", 180.0)),
+        float(joint.get("max_value", 180.0)),
     }
     notes: list[str] = []
-    for angle in sorted(angles):
-        rotated = rotated_mesh(
+    for value in sorted(values):
+        rotated = transformed_mesh(
             child,
+            kind=str(joint.get("kind", "revolute")),
             axis=tuple(joint["axis"]),
             origin=tuple(joint["origin"]),
-            angle_deg=angle,
+            value=value,
         )
         if meshes_interfere(parent, rotated, min_depth_mm=min_depth_mm):
+            unit = "mm" if joint.get("kind", "revolute") == "prismatic" else "degrees"
             notes.append(
-                f"parts '{joint['parent']}' and '{joint['child']}' overlap at {angle:.0f} degrees"
+                f"parts '{joint['parent']}' and '{joint['child']}' overlap at {value:.0f} {unit}"
             )
     return not notes, notes
 
@@ -112,5 +131,5 @@ __all__ = [
     "articulation_clearance",
     "load_mesh",
     "meshes_interfere",
-    "rotated_mesh",
+    "transformed_mesh",
 ]

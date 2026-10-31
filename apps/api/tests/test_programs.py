@@ -107,6 +107,8 @@ def part_brief_payload(
         "assumptions": ["Envelope inferred from the request."],
         "unsupported_requirements": unsupported or [],
         "unknowns": [],
+        "required_components": [],
+        "required_motion": "none",
         "clarification_questions": [],
         "requirement_sources": [],
     }
@@ -324,7 +326,9 @@ async def test_part_pipeline_reports_no_pass_honestly(tmp_path: Path) -> None:
 
 
 async def test_unsupported_part_request_stays_honest(tmp_path: Path) -> None:
-    client = ScriptedClient([part_brief_payload(supported=False)])
+    client = ScriptedClient(
+        [part_brief_payload(supported=False), part_brief_payload(supported=False)]
+    )
     orchestrator = make_orchestrator(tmp_path, client)
     run = orchestrator.create_run(
         DesignRunCreateRequest(prompt="Design a mounting bracket for a whole motorbike.")
@@ -359,3 +363,154 @@ async def test_part_capability_requires_the_model_offline(tmp_path: Path) -> Non
     assert "Meta model" in evidence["requirements"]["capability_assessment"][
         "unsupported_requirements"
     ][0]
+
+
+def test_custom_part_rejects_a_multi_part_request() -> None:
+    from app.evaluation.part_evaluator import evaluate_part
+    from app.mechanism.schemas import (
+        DesignProgram,
+        ExpectedBoundingBox,
+        PartBrief,
+        PartRequirements,
+    )
+
+    brief = PartBrief(
+        part=PartRequirements(
+            description="gripper",
+            max_width_mm=200,
+            max_height_mm=200,
+            max_thickness_mm=50,
+        ),
+        required_components=["mounting plate", "fingers"],
+        required_motion="prismatic",
+    )
+    program = DesignProgram(
+        program_id="program_001",
+        source=GOOD_PROGRAM,
+        expected_bbox=ExpectedBoundingBox(width_mm=60, height_mm=40, thickness_mm=6),
+    )
+    execution = run_design_program(program)
+
+    evaluation = evaluate_part(
+        brief, execution, program_id="program_001", deterministic=True
+    )
+
+    assert evaluation.status.value == "failed"
+    assert "single_part_scope" in evaluation.failed_checks
+    assert any("assembly capability" in note for note in evaluation.diagnostic_notes)
+
+
+def test_custom_part_features_are_not_missing_components() -> None:
+    from app.evaluation.part_evaluator import evaluate_part
+    from app.mechanism.schemas import (
+        DesignProgram,
+        ExpectedBoundingBox,
+        PartBrief,
+        PartRequirements,
+    )
+
+    brief = PartBrief(
+        part=PartRequirements(
+            description="bearing housing",
+            max_width_mm=70,
+            max_height_mm=65,
+            max_thickness_mm=60,
+        ),
+        required_components=[
+            "base",
+            "central cylindrical bearing seat with 30 mm bore",
+            "four mounting holes",
+            "two reinforcing ribs",
+            "3 mm external fillets",
+        ],
+        required_motion="none",
+    )
+    program = DesignProgram(
+        program_id="program_001",
+        source=GOOD_PROGRAM,
+        expected_bbox=ExpectedBoundingBox(width_mm=60, height_mm=40, thickness_mm=6),
+    )
+    execution = run_design_program(program)
+
+    evaluation = evaluate_part(
+        brief, execution, program_id="program_001", deterministic=True
+    )
+
+    assert evaluation.status.value == "passed", evaluation.diagnostic_notes
+    assert "components_covered" not in evaluation.failed_checks
+    assert "single_part_scope" not in evaluation.failed_checks
+
+
+async def test_bearing_housing_refusal_is_retried_as_a_single_part() -> None:
+    from app.ai.part_parser import parse_part_requirements
+
+    prompt = (
+        "Design a bearing housing with a 70 x 60 x 40 mm base. Add a central cylindrical "
+        "bearing seat with a 30 mm bore, four mounting holes, and two reinforcing ribs. "
+        "Include 3 mm fillets on the external edges."
+    )
+    refusal = part_brief_payload(supported=False)
+    refusal["reason"] = "The request asks for multiple separate components (base, seat, ribs)."
+    client = ScriptedClient([refusal, part_brief_payload()])
+
+    result = await parse_part_requirements(prompt, client=client)
+
+    assert result.brief is not None
+    assert result.brief.part.description == "Sensor mounting bracket"
+    assert client.payloads == []
+
+
+def test_custom_part_covers_a_named_component() -> None:
+    from app.evaluation.part_evaluator import evaluate_part
+    from app.mechanism.schemas import (
+        DesignProgram,
+        ExpectedBoundingBox,
+        PartBrief,
+        PartRequirements,
+    )
+
+    source = """import cadquery as cq
+
+
+def build():
+    bracket = cq.Workplane("XY").box(60, 40, 6)
+    return {"parts": {"sensor_bracket": bracket}}
+"""
+    brief = PartBrief(
+        part=PartRequirements(
+            description="sensor bracket",
+            max_width_mm=80,
+            max_height_mm=60,
+            max_thickness_mm=8,
+        ),
+        required_components=["sensor bracket"],
+        required_motion="none",
+    )
+    execution = run_design_program(
+        DesignProgram(
+            program_id="program_001",
+            source=source,
+            expected_bbox=ExpectedBoundingBox(width_mm=60, height_mm=40, thickness_mm=6),
+        )
+    )
+
+    evaluation = evaluate_part(
+        brief, execution, program_id="program_001", deterministic=True
+    )
+
+    assert evaluation.status.value == "passed", evaluation.diagnostic_notes
+
+
+async def test_part_parser_maps_required_components_and_motion() -> None:
+    from app.ai.part_parser import parse_part_requirements
+
+    payload = part_brief_payload()
+    payload["required_components"] = ["mounting plate", "fingers"]
+    payload["required_motion"] = "prismatic"
+    client = ScriptedClient([payload])
+
+    result = await parse_part_requirements("Design a gripper", client=client, assembly=True)
+
+    assert result.brief is not None
+    assert result.brief.required_components == ["mounting plate", "fingers"]
+    assert result.brief.required_motion == "prismatic"

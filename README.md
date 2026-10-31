@@ -197,12 +197,17 @@ tools execute it, and the evaluator verifies the result.**
    This is a **best-effort sandbox, not a hardened OS boundary**: model code never runs in the API
    process, but production deployments should also run the API in a container without network
    access or credentials.
-5. **Assemblies.** For the `assembly` capability `build()` returns named parts plus revolute joint
-   declarations (`parent`, `child`, `origin`, `axis`, `min_deg`, `max_deg`). Each part is exported
-   separately and as a combined mesh; the evaluator additionally requires at least two parts, at
-   least one valid joint, and **articulation clearance**: the child part is rotated through the
-   declared range and must not interpenetrate the parent (penetration deeper than 0.2 mm fails).
-   Only the declared jointed pair is checked; pins, bores and hardware clearances are not verified.
+5. **Assemblies.** For the `assembly` capability `build()` returns named parts plus joint
+   declarations (`parent`, `child`, `kind` = `revolute` or `prismatic`, `origin`, `axis`,
+   `min_value`, `max_value`; degrees for revolute, millimetres for prismatic). Each part is
+   exported separately and as a combined mesh. The evaluator requires at least two parts, at
+   least one valid joint, the requested motion kind, and **articulation clearance**: the child
+   part is rotated (revolute) or translated (prismatic) through the declared range and must not
+   interpenetrate the parent (penetration deeper than 0.2 mm fails). Only the declared jointed
+   pair is checked; pins, bores and hardware clearances are not verified.
+   Every program-authorship capability also checks **component coverage**: the brief's
+   `required_components` must be recognizable in the part names, and `custom_part` refuses
+   requests that need multiple parts or relative motion (`single_part_scope`).
 6. **Structures.** For the `structural_frame` capability `build()` returns only named parts
    (joints are optional). Checks require at least four closed solids, the assembled span to match
    the requested envelope (at least 90% of the largest requested dimension), the envelope bounds

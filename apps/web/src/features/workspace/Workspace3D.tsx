@@ -11,6 +11,8 @@ type WorkspaceMode = "cad" | "motion" | "concept";
 interface Workspace3DProps {
   geometryUrl: string | null;
   geometryArtifactId: string | null;
+  verified: boolean;
+  attemptCount: number;
   simulation: SimulationResult | null;
   brief: BriefArtifact | null;
   metrics: CandidateMetrics | null;
@@ -25,6 +27,8 @@ const MODES: { id: WorkspaceMode; label: string }[] = [
 export function Workspace3D({
   geometryUrl,
   geometryArtifactId,
+  verified,
+  attemptCount,
   simulation,
   brief,
   metrics,
@@ -74,15 +78,20 @@ export function Workspace3D({
       {mode === "cad" ? (
         <div className="workspace-body">
           <div className="mode-badges">
-            <span className="badge badge-verified">verified artifact</span>
+            <span className={`badge ${verified ? "badge-verified" : "badge-unavailable"}`}>
+              {verified ? "verified artifact" : "best attempt (not verified)"}
+            </span>
             {geometryArtifactId ? <code>{geometryArtifactId}</code> : null}
           </div>
           {geometryUrl ? (
             <CadViewer url={geometryUrl} />
           ) : (
             <p className="empty-state">
-              No geometry artifact for this run. Enable the CAD engine (`uv sync --extra cad`) or
-              run a candidate that compiles.
+              {attemptCount > 0
+                ? "No candidate produced a geometry artifact. Check the Programs panel for the "
+                  + "attempt errors."
+                : "No geometry artifact was produced for this run because no candidate was "
+                  + "generated or compiled."}
             </p>
           )}
         </div>

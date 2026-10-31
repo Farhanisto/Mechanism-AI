@@ -37,7 +37,7 @@ export function ClarificationForm({ run, onSubmit }: ClarificationFormProps) {
               id={`answer-${question.question_id}`}
               type="text"
               value={answers[question.question_id] ?? ""}
-              placeholder="Your answer"
+              placeholder="Your answer (free text or a number)"
               onChange={(event) =>
                 setAnswers((current) => ({
                   ...current,

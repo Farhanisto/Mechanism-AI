@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 from collections import defaultdict
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -50,6 +51,7 @@ from app.mechanism.schemas import (
     DesignRunCreateRequest,
     EvaluationStatus,
     EvidenceBundle,
+    FourBarParameters,
     GeometryArtifact,
     NormalizedBrief,
     PartBrief,
@@ -310,8 +312,9 @@ class DesignRunOrchestrator:
         self._update_run(run)
         return run
 
-    @staticmethod
+    @classmethod
     def _apply_part_answer(
+        cls,
         brief: PartBrief,
         question: ClarificationQuestion,
         raw_answer: str,
@@ -333,23 +336,36 @@ class DesignRunOrchestrator:
             "max_thickness_mm": "max_thickness_mm",
         }
         if field in numeric_fields:
-            try:
-                value = float(answer)
-            except ValueError as exc:
-                raise ValueError("Answer must be a number in millimetres") from exc
-            limit = 1_000.0 if field == "part.max_thickness_mm" else 10_000.0
-            if not 0.0 < value <= limit:
-                raise ValueError("Answer must be a positive value within the allowed range")
-            part = brief.part.model_copy(update={numeric_fields[field]: value})
+            value = cls._extract_measurement(answer)
+            limit = (
+                1_000.0
+                if numeric_fields[field] == "max_thickness_mm"
+                else 10_000.0
+            )
+            if value is not None and 0.0 < value <= limit:
+                part = brief.part.model_copy(update={numeric_fields[field]: value})
+                return brief.model_copy(
+                    update={
+                        "part": part,
+                        "requirement_sources": sources,
+                        "unknowns": unknowns,
+                    }
+                )
+            # Free-text or out-of-range answer: keep the whole answer on record and
+            # let the model interpret it when generating the program.
+            assumptions = list(brief.assumptions)
+            assumptions.append(cls._free_text_assumption(question, answer))
             return brief.model_copy(
-                update={"part": part, "requirement_sources": sources, "unknowns": unknowns}
+                update={
+                    "assumptions": assumptions,
+                    "requirement_sources": sources,
+                    "unknowns": unknowns,
+                }
             )
 
         if field == "verification_scope.kinematic_only":
             normalized = answer.lower()
-            if normalized not in ("yes", "no"):
-                raise ValueError("Answer must be 'yes' or 'no'")
-            if normalized == "no":
+            if normalized.startswith(("n", "false")):
                 raise UnsupportedRequirementError(
                     "The answer needs engineering analyses the evaluator does not implement; "
                     "the run stops honestly."
@@ -375,8 +391,9 @@ class DesignRunOrchestrator:
             update={"assumptions": assumptions, "requirement_sources": sources}
         )
 
-    @staticmethod
+    @classmethod
     def _apply_answer(
+        cls,
         brief: NormalizedBrief,
         question: ClarificationQuestion,
         raw_answer: str,
@@ -391,9 +408,7 @@ class DesignRunOrchestrator:
 
         if field in ("verification_scope.kinematic_only", "target_motion.type"):
             normalized = answer.lower()
-            if normalized not in ("yes", "no"):
-                raise ValueError("Answer must be 'yes' or 'no'")
-            if normalized == "no":
+            if normalized.startswith(("n", "false")):
                 raise UnsupportedRequirementError(
                     f"The answer to '{question.question_id}' needs checks or motion the "
                     "evaluator does not implement; the run stops honestly."
@@ -420,27 +435,34 @@ class DesignRunOrchestrator:
             "target_motion.trajectory_tolerance",
             "constraints.max_footprint",
         ):
-            try:
-                value = float(answer)
-            except ValueError as exc:
-                raise ValueError("Answer must be a number in millimetres") from exc
+            value = cls._extract_measurement(answer)
             limit = 100.0 if field.endswith("trajectory_tolerance") else 10_000.0
-            if not 0.0 < value <= limit:
-                raise ValueError("Answer must be a positive value within the allowed range")
-            if field == "constraints.max_footprint":
-                update = {
-                    "constraints": brief.constraints.model_copy(
-                        update={"max_footprint": value}
-                    )
-                }
-            else:
-                key = field.rsplit(".", 1)[1]
-                update = {
-                    "target_motion": brief.target_motion.model_copy(update={key: value})
-                }
+            if value is not None and 0.0 < value <= limit:
+                if field == "constraints.max_footprint":
+                    update = {
+                        "constraints": brief.constraints.model_copy(
+                            update={"max_footprint": value}
+                        )
+                    }
+                else:
+                    key = field.rsplit(".", 1)[1]
+                    update = {
+                        "target_motion": brief.target_motion.model_copy(
+                            update={key: value}
+                        )
+                    }
+                return brief.model_copy(
+                    update={
+                        **update,
+                        "requirement_sources": sources,
+                        "unknowns": unknowns,
+                    }
+                )
+            assumptions = list(brief.assumptions)
+            assumptions.append(cls._free_text_assumption(question, answer))
             return brief.model_copy(
                 update={
-                    **update,
+                    "assumptions": assumptions,
                     "requirement_sources": sources,
                     "unknowns": unknowns,
                 }
@@ -451,6 +473,25 @@ class DesignRunOrchestrator:
         return brief.model_copy(
             update={"assumptions": assumptions, "requirement_sources": sources}
         )
+
+    _MM_MEASUREMENT = re.compile(r"(-?\d+(?:\.\d+)?)\s*mm\b", re.IGNORECASE)
+    _PLAIN_MEASUREMENT = re.compile(r"(-?\d+(?:\.\d+)?)")
+
+    @classmethod
+    def _extract_measurement(cls, answer: str) -> float | None:
+        """Best-effort millimetre value from a free-text clarification answer."""
+        for pattern in (cls._MM_MEASUREMENT, cls._PLAIN_MEASUREMENT):
+            match = pattern.search(answer)
+            if match:
+                try:
+                    return float(match.group(1))
+                except ValueError:
+                    return None
+        return None
+
+    @staticmethod
+    def _free_text_assumption(question: ClarificationQuestion, answer: str) -> str:
+        return f"Clarification {question.question_id} answered: {answer}"
 
     def _check_cancel(self, run: DesignRun) -> None:
         if run.run_id in self._cancelled:
@@ -721,6 +762,20 @@ class DesignRunOrchestrator:
                 self._record_completion(provider_calls, f"candidate_{attempt:03d}", completion)
             else:
                 candidate = default_candidate(attempt_number=attempt)
+
+            if brief.link_lengths is not None:
+                # Explicit link lengths in the request are hard requirements; the
+                # model may not silently substitute its own linkage.
+                candidate = candidate.model_copy(
+                    update={
+                        "parameters": FourBarParameters(
+                            ground_length=brief.link_lengths.ground_mm,
+                            crank_length=brief.link_lengths.crank_mm,
+                            coupler_length=brief.link_lengths.coupler_mm,
+                            rocker_length=brief.link_lengths.rocker_mm,
+                        )
+                    }
+                )
 
             self.events.publish(
                 run.run_id,

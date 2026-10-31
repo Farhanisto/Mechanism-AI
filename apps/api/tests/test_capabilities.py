@@ -34,6 +34,25 @@ def test_default_registry_contains_the_tested_four_bar_capability() -> None:
     assert entry.parameter_constraints
 
 
+def test_single_part_with_pivot_hole_routes_to_custom_part() -> None:
+    entry = default_registry().match_domain(
+        "Design a lever arm with rounded ends, a 12 mm pivot through-hole, a 50 mm "
+        "elongated slot, and a recessed mounting surface."
+    )
+
+    assert entry is not None
+    assert entry.capability_id == "custom_part"
+
+
+def test_hinge_with_leaves_and_pin_still_routes_to_assembly() -> None:
+    entry = default_registry().match_domain(
+        "Design a hinge with two leaves, knuckles and a pivot pin."
+    )
+
+    assert entry is not None
+    assert entry.capability_id == "assembly"
+
+
 def test_default_registry_contains_the_model_authored_part_capability() -> None:
     registry = default_registry()
     entry = registry.get("custom_part")
@@ -142,3 +161,14 @@ def test_detected_demand_categories() -> None:
         "thermal",
     ]
     assert detected_demand_categories("100 mm of travel") == []
+
+
+def test_demand_categories_use_word_boundaries() -> None:
+    # "gripper" must not match the "ppe" term, nor "payload"/"reinforced" others.
+    assert detected_demand_categories("Design a two-finger parallel gripper plate") == []
+    assert detected_demand_categories("Design a payload bracket") == []
+    assert detected_demand_categories("Design a reinforced bracket") == []
+    assert detected_demand_categories("Design a protective guard") == ["safety_certification"]
+    assert detected_demand_categories("The part must carry a load") == [
+        "structural_strength"
+    ]

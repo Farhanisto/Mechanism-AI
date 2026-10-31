@@ -7,6 +7,8 @@ parts and joints must exist and the jointed parts must move through the declared
 range without interpenetrating. Thresholds live here, not in model output.
 """
 
+import re
+
 from app.mechanism.schemas import (
     EvaluationStatus,
     PartBrief,
@@ -18,12 +20,13 @@ from app.programs.runner import ProgramExecution
 
 PART_EVALUATOR_VERSION = "0.2.0"
 ENVELOPE_TOLERANCE_MM = 0.5
-SIZE_BUDGET_BYTES = 5_000_000
+SIZE_BUDGET_BYTES = 20_000_000
 ARTICULATION_ANGLES = 3
 
 CHECKS = (
     "program_executed",
     "mesh_valid",
+    "components_covered",
     "envelope_width",
     "envelope_height",
     "envelope_thickness",
@@ -33,15 +36,52 @@ CHECKS = (
 ASSEMBLY_CHECKS = (
     "parts_present",
     "joints_valid",
+    "motion_covered",
     "articulation_clearance",
 )
 STRUCTURE_CHECKS = (
     "parts_present",
     "span_matches_envelope",
 )
+SCOPE_CHECKS = ("single_part_scope",)
 MIN_STRUCTURE_PARTS = 4
 SPAN_TOLERANCE_RATIO = 0.9
 STRUCTURE_ENVELOPE_TOLERANCE_RATIO = 0.05
+
+
+def _tokens(text: str) -> set[str]:
+    tokens = {
+        token for token in re.split(r"[^a-z0-9]+", text.lower()) if len(token) >= 3
+    }
+    stop_words = {
+        "the",
+        "and",
+        "with",
+        "part",
+        "parts",
+        "for",
+        "into",
+        "from",
+        "that",
+        "this",
+    }
+    return {
+        (token[:-1] if token.endswith("s") and len(token) > 3 else token)
+        for token in tokens
+        if token not in stop_words
+    }
+
+
+def _missing_components(required: list[str], part_names: list[str]) -> list[str]:
+    part_tokens: set[str] = set()
+    for name in part_names:
+        part_tokens |= _tokens(name)
+    missing: list[str] = []
+    for requirement in required:
+        tokens = _tokens(requirement)
+        if tokens and not (tokens & part_tokens):
+            missing.append(requirement)
+    return missing
 
 
 def evaluate_part(
@@ -66,6 +106,17 @@ def evaluate_part(
     checks["mesh_valid"] = bool(parts) and all(
         part.stats.triangle_count > 0 and part.stats.volume_mm3 > 0.0 for part in parts
     )
+
+    if require_assembly or require_structure:
+        missing_components = _missing_components(
+            brief.required_components, [part.name for part in parts]
+        )
+        checks["components_covered"] = executed and not missing_components
+        if missing_components:
+            notes.append(
+                "The design does not include the requested components: "
+                + ", ".join(missing_components)
+            )
 
     if stats is not None:
         ratio = STRUCTURE_ENVELOPE_TOLERANCE_RATIO if require_structure else 0.0
@@ -109,7 +160,7 @@ def evaluate_part(
                 joint.parent in part_names
                 and joint.child in part_names
                 and joint.parent != joint.child
-                and joint.min_deg <= joint.max_deg
+                and joint.min_value <= joint.max_value
                 for joint in execution.joints
             )
         checks["joints_valid"] = valid_joints
@@ -128,10 +179,28 @@ def evaluate_part(
                         f"Joint '{joint.name}': {note}" for note in joint_notes
                     )
         checks["articulation_clearance"] = clearance_ok
+
+        required_motion = brief.required_motion
+        if required_motion == "prismatic":
+            checks["motion_covered"] = any(
+                joint.kind == "prismatic" for joint in execution.joints
+            )
+        elif required_motion == "rotary":
+            checks["motion_covered"] = any(
+                joint.kind == "revolute" for joint in execution.joints
+            )
+        else:
+            checks["motion_covered"] = True
+        if not checks["motion_covered"]:
+            notes.append(
+                f"The requested {required_motion} motion is not represented by the "
+                "declared joints."
+            )
+
         if not checks["parts_present"]:
             notes.append("An assembly needs at least two parts.")
         if not checks["joints_valid"]:
-            notes.append("An assembly needs at least one valid revolute joint.")
+            notes.append("An assembly needs at least one valid joint.")
 
     if require_structure:
         checks["parts_present"] = bool(executed and len(parts) >= MIN_STRUCTURE_PARTS)
@@ -157,11 +226,27 @@ def evaluate_part(
                 "the requested span/length."
             )
 
+    if not require_assembly and not require_structure:
+        # Features of one solid (bores, ribs, fillets) are not separate components; only
+        # relative motion means the request does not fit a single static part.
+        scope_ok = brief.required_motion == "none"
+        checks["single_part_scope"] = scope_ok
+        if not scope_ok:
+            notes.append(
+                "The request needs multiple parts or relative motion; the custom_part "
+                "capability models one static part. Use the assembly capability."
+            )
+
     ordered = list(CHECKS)
     if require_assembly:
         ordered.extend(ASSEMBLY_CHECKS)
     if require_structure:
         ordered.extend(STRUCTURE_CHECKS)
+    if not require_assembly and not require_structure:
+        # Component coverage applies to assemblies/structures; a single part's features
+        # (bores, holes, ribs, fillets) live inside that one part.
+        ordered = [name for name in ordered if name != "components_covered"]
+        ordered.extend(SCOPE_CHECKS)
     failed = [name for name in ordered if not checks.get(name, False)]
 
     total_volume = sum(part.stats.volume_mm3 for part in parts)
@@ -189,6 +274,7 @@ def evaluate_part(
 
 __all__ = [
     "ARTICULATION_ANGLES",
+    "SCOPE_CHECKS",
     "STRUCTURE_ENVELOPE_TOLERANCE_RATIO",
     "MIN_STRUCTURE_PARTS",
     "SPAN_TOLERANCE_RATIO",

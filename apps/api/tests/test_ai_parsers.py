@@ -33,6 +33,7 @@ BRIEF_PAYLOAD: dict[str, Any] = {
     "clarification_questions": [],
     "requirement_sources": [],
     "requested_checks": [],
+    "link_lengths": None,
     "link_width_mm": None,
     "link_thickness_mm": None,
     "pivot_hole_mm": None,
@@ -101,6 +102,7 @@ async def test_requirements_parser_validates_and_adds_standard_assumptions() -> 
         "clarification_questions",
         "requirement_sources",
         "requested_checks",
+        "link_lengths",
         "link_width_mm",
         "link_thickness_mm",
         "pivot_hole_mm",
@@ -294,3 +296,65 @@ def test_apply_prompt_cad_specs_backfills_missing_model_values() -> None:
     explicit = brief.model_copy(update={"link_thickness_mm": 5.0, "include_pins": True})
     kept = apply_prompt_cad_specs(explicit, prompt)
     assert kept.link_thickness_mm == 5.0
+
+
+def test_default_brief_extracts_explicit_link_lengths_both_phrasings() -> None:
+    before = default_brief_from_prompt(
+        "Create a four-bar linkage with a 120 mm ground link, a 40 mm crank, "
+        "a 100 mm coupler, and a 90 mm rocker."
+    )
+    after = default_brief_from_prompt(
+        "Design a four-bar linkage: ground link (120 mm), crank (40 mm), "
+        "coupler (100 mm), rocker (90 mm)."
+    )
+
+    for brief in (before, after):
+        assert brief.link_lengths is not None
+        assert brief.link_lengths.ground_mm == 120.0
+        assert brief.link_lengths.crank_mm == 40.0
+        assert brief.link_lengths.coupler_mm == 100.0
+        assert brief.link_lengths.rocker_mm == 90.0
+
+    plain = default_brief_from_prompt(
+        "Design a compact four-bar linkage with 100 mm of travel."
+    )
+    assert plain.link_lengths is None
+
+
+def test_apply_prompt_cad_specs_backfills_link_lengths() -> None:
+    from app.ai.requirements_parser import apply_prompt_cad_specs
+    from app.mechanism.schemas import HardConstraints, NormalizedBrief, TargetMotion
+
+    brief = NormalizedBrief(
+        target_motion=TargetMotion(travel_distance=100.0),
+        constraints=HardConstraints(max_footprint=200.0),
+    )
+
+    filled = apply_prompt_cad_specs(
+        brief,
+        "Create a four-bar linkage with a 120 mm ground link, a 40 mm crank, "
+        "a 100 mm coupler, and a 90 mm rocker.",
+    )
+
+    assert filled.link_lengths is not None
+    assert filled.link_lengths.ground_mm == 120.0
+    assert filled.requirement_sources["link_lengths"] == "user_provided"
+
+
+def test_explicitly_stated_targets_are_marked_user_provided() -> None:
+    from app.ai.requirements_parser import apply_prompt_cad_specs
+    from app.mechanism.schemas import HardConstraints, NormalizedBrief, TargetMotion
+
+    brief = NormalizedBrief(
+        target_motion=TargetMotion(travel_distance=80.0, trajectory_tolerance=5.0),
+        constraints=HardConstraints(max_footprint=10000.0),
+    )
+
+    filled = apply_prompt_cad_specs(
+        brief, "Design a linkage with 100 mm of travel in a 200 mm footprint."
+    )
+
+    assert (
+        filled.requirement_sources["target_motion.travel_distance"] == "user_provided"
+    )
+    assert filled.requirement_sources["constraints.max_footprint"] == "user_provided"

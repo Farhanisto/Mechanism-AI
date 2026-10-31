@@ -65,6 +65,15 @@ class CapabilityAssessment(BaseModel):
     unavailable_checks: list[str] = Field(default_factory=list)
 
 
+class LinkLengths(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ground_mm: float = Field(gt=0, le=10_000)
+    crank_mm: float = Field(gt=0, le=10_000)
+    coupler_mm: float = Field(gt=0, le=10_000)
+    rocker_mm: float = Field(gt=0, le=10_000)
+
+
 class NormalizedBrief(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -76,6 +85,7 @@ class NormalizedBrief(BaseModel):
     evaluator_config: dict[str, float | int | str | bool] = Field(default_factory=dict)
     unknowns: list[str] = Field(default_factory=list)
     requested_checks: list[str] = Field(default_factory=list)
+    link_lengths: LinkLengths | None = None
     link_width_mm: float | None = Field(default=None, gt=0, le=1_000)
     link_thickness_mm: float | None = Field(default=None, gt=0, le=100)
     pivot_hole_mm: float | None = Field(default=None, gt=0, le=100)
@@ -383,9 +393,9 @@ class PartRequirements(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     description: str = Field(min_length=1, max_length=2000)
-    max_width_mm: float = Field(gt=0, le=10_000)
-    max_height_mm: float = Field(gt=0, le=10_000)
-    max_thickness_mm: float = Field(gt=0, le=1_000)
+    max_width_mm: float = Field(gt=0, le=100_000)
+    max_height_mm: float = Field(gt=0, le=100_000)
+    max_thickness_mm: float = Field(gt=0, le=100_000)
     notes: list[str] = Field(default_factory=list)
 
 
@@ -396,6 +406,8 @@ class PartBrief(BaseModel):
     assumptions: list[str] = Field(default_factory=list)
     unknowns: list[str] = Field(default_factory=list)
     unsupported_requirements: list[str] = Field(default_factory=list)
+    required_components: list[str] = Field(default_factory=list)
+    required_motion: Literal["rotary", "prismatic", "none"] = "none"
     clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
     requirement_sources: dict[str, RequirementSource] = Field(default_factory=dict)
 
@@ -403,9 +415,9 @@ class PartBrief(BaseModel):
 class ExpectedBoundingBox(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    width_mm: float = Field(gt=0, le=10_000)
-    height_mm: float = Field(gt=0, le=10_000)
-    thickness_mm: float = Field(gt=0, le=1_000)
+    width_mm: float = Field(gt=0, le=100_000)
+    height_mm: float = Field(gt=0, le=100_000)
+    thickness_mm: float = Field(gt=0, le=100_000)
 
 
 class DeclaredParameter(BaseModel):
@@ -470,13 +482,14 @@ class ProgramPart(BaseModel):
 class ProgramJoint(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(min_length=1, max_length=32)
-    parent: str = Field(min_length=1, max_length=32)
-    child: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1, max_length=64)
+    parent: str = Field(min_length=1, max_length=64)
+    child: str = Field(min_length=1, max_length=64)
+    kind: Literal["revolute", "prismatic"] = "revolute"
     origin: tuple[float, float, float] = (0.0, 0.0, 0.0)
     axis: tuple[float, float, float] = (0.0, 0.0, 1.0)
-    min_deg: float = Field(default=-180.0, ge=-360.0, le=360.0)
-    max_deg: float = Field(default=180.0, ge=-360.0, le=360.0)
+    min_value: float = Field(default=-180.0, ge=-10_000.0, le=10_000.0)
+    max_value: float = Field(default=180.0, ge=-10_000.0, le=10_000.0)
 
 
 class ProgramRecord(BaseModel):

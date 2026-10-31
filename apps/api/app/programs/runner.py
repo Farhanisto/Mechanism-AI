@@ -22,8 +22,8 @@ from app.cad.compiler import MeshStats, mesh_stats
 from app.mechanism.schemas import DesignProgram, ProgramJoint
 
 SANDBOX_VERSION = "0.1.0"
-DEFAULT_TIMEOUT_SECONDS = 15
-DEFAULT_MAX_BYTES = 5_000_000
+DEFAULT_TIMEOUT_SECONDS = 45
+DEFAULT_MAX_BYTES = 20_000_000
 DEFAULT_MEMORY_BYTES = 0
 TESSELATION_TOLERANCE_MM = 0.01
 ANGULAR_TOLERANCE_RAD = 0.1
@@ -215,7 +215,7 @@ def run_design_program(
             )
 
         raw_parts = result.get("parts") or []
-        if not isinstance(raw_parts, list) or len(raw_parts) > 80:
+        if not isinstance(raw_parts, list) or len(raw_parts) > 200:
             return _failure(duration_ms, stdout, "the manifest lists an invalid part set")
         parts: list[ProgramPartExecution] = []
         names: set[str] = set()
@@ -256,7 +256,7 @@ def run_design_program(
                     raise ValueError("joint references a part that was not produced")
                 if joint.parent == joint.child:
                     raise ValueError("joint must connect two different parts")
-                if joint.min_deg > joint.max_deg:
+                if joint.min_value > joint.max_value:
                     raise ValueError("joint limits are inverted")
                 joints.append(joint)
         except ValueError as exc:

@@ -46,8 +46,9 @@ def build():
                 "child": "leaf_b",
                 "origin": [0, 0, 0],
                 "axis": [1, 0, 0],
-                "min_deg": -90,
-                "max_deg": 90,
+                "kind": "revolute",
+                "min_value": -90,
+                "max_value": 90,
             }
         ],
     }
@@ -68,8 +69,9 @@ def build():
                 "child": "leaf_b",
                 "origin": [0, 0, 0],
                 "axis": [1, 0, 0],
-                "min_deg": -90,
-                "max_deg": 90,
+                "kind": "revolute",
+                "min_value": -90,
+                "max_value": 90,
             }
         ],
     }
@@ -109,6 +111,8 @@ def brief_payload() -> dict[str, Any]:
         "assumptions": [],
         "unknowns": [],
         "unsupported_requirements": [],
+        "required_components": [],
+        "required_motion": "none",
         "clarification_questions": [],
         "requirement_sources": [],
     }
@@ -240,7 +244,11 @@ def test_assembly_evaluator_flags_colliding_articulation() -> None:
     execution = run_design_program(program)
 
     evaluation = evaluate_part(
-        BRIEF, execution, program_id="program_001", deterministic=True, require_assembly=True
+        SLIDER_BRIEF,
+        execution,
+        program_id="program_001",
+        deterministic=True,
+        require_assembly=True,
     )
 
     assert evaluation.status.value == "failed"
@@ -324,3 +332,174 @@ async def test_assembly_pipeline_runs_the_model_program(tmp_path: Path) -> None:
     assert any(
         "articulation" in limitation for limitation in evidence["limitations"]
     )
+
+GRIPPER_PROMPT = (
+    "Design a robotic gripper with a mounting plate, two sliding fingers, guide rails, and a "
+    "central drive mechanism. Include mounting holes and assemble the parts so both fingers move "
+    "symmetrically toward and away from each other."
+)
+
+SLIDER_CLEAR = """import cadquery as cq
+
+
+def build():
+    rail = cq.Workplane("XY").box(120, 20, 10)
+    finger = cq.Workplane("XY").box(20, 10, 10).translate((0, 25, 0))
+    return {
+        "parts": {"rail_base": rail, "finger_left": finger},
+        "joints": [
+            {"name": "slide", "parent": "rail_base", "child": "finger_left",
+             "kind": "prismatic", "origin": [0, 0, 0], "axis": [0, 1, 0],
+             "min_value": -10, "max_value": 10}
+        ],
+    }
+"""
+
+SLIDER_COLLIDING = """import cadquery as cq
+
+
+def build():
+    rail = cq.Workplane("XY").box(120, 20, 10)
+    finger = cq.Workplane("XY").box(20, 10, 10).translate((0, 5, 0))
+    return {
+        "parts": {"rail_base": rail, "finger_left": finger},
+        "joints": [
+            {"name": "slide", "parent": "rail_base", "child": "finger_left",
+             "kind": "prismatic", "origin": [0, 0, 0], "axis": [0, 1, 0],
+             "min_value": -10, "max_value": 10}
+        ],
+    }
+"""
+
+
+def test_gripper_prompt_routes_to_the_assembly_capability() -> None:
+    registry = default_registry()
+
+    assert registry.match_domain(GRIPPER_PROMPT).capability_id == "assembly"
+
+
+def _slider_execution(source: str):
+    from app.cad.plan import InvalidPlanError  # noqa: F401 - ensure import path exists
+    from app.mechanism.schemas import DesignProgram, ExpectedBoundingBox
+
+    return run_design_program(
+        DesignProgram(
+            program_id="program_001",
+            capability_id="assembly",
+            source=source,
+            expected_bbox=ExpectedBoundingBox(
+                width_mm=120, height_mm=80, thickness_mm=20
+            ),
+        )
+    )
+
+
+SLIDER_BRIEF = PartBrief(
+    part=PartRequirements(
+        description="linear slider",
+        max_width_mm=200.0,
+        max_height_mm=100.0,
+        max_thickness_mm=40.0,
+    ),
+    required_components=["rail", "finger"],
+    required_motion="prismatic",
+)
+
+
+def test_prismatic_joint_supports_sliding_motion() -> None:
+    execution = _slider_execution(SLIDER_CLEAR)
+
+    assert execution.status == "executed"
+    assert execution.joints[0].kind == "prismatic"
+
+    evaluation = evaluate_part(
+        SLIDER_BRIEF,
+        execution,
+        program_id="program_001",
+        deterministic=True,
+        require_assembly=True,
+    )
+
+    assert evaluation.status.value == "passed", evaluation.diagnostic_notes
+
+
+def test_prismatic_joint_detects_sliding_interference() -> None:
+    execution = _slider_execution(SLIDER_COLLIDING)
+
+    evaluation = evaluate_part(
+        SLIDER_BRIEF,
+        execution,
+        program_id="program_001",
+        deterministic=True,
+        require_assembly=True,
+    )
+
+    assert evaluation.status.value == "failed"
+    assert "articulation_clearance" in evaluation.failed_checks
+
+
+def test_assembly_requires_requested_components() -> None:
+    execution = _slider_execution(SLIDER_CLEAR)
+    brief = SLIDER_BRIEF.model_copy(
+        update={
+            "required_components": ["rail", "finger", "drive mechanism"],
+            "required_motion": "prismatic",
+        }
+    )
+
+    evaluation = evaluate_part(
+        brief, execution, program_id="program_001", deterministic=True, require_assembly=True
+    )
+
+    assert evaluation.status.value == "failed"
+    assert "components_covered" in evaluation.failed_checks
+    assert any("drive mechanism" in note for note in evaluation.diagnostic_notes)
+
+
+def test_assembly_requires_requested_motion_kind() -> None:
+    execution = _slider_execution(SLIDER_CLEAR)
+    brief = SLIDER_BRIEF.model_copy(
+        update={"required_components": ["rail", "finger"], "required_motion": "rotary"}
+    )
+
+    evaluation = evaluate_part(
+        brief, execution, program_id="program_001", deterministic=True, require_assembly=True
+    )
+
+    assert evaluation.status.value == "failed"
+    assert "motion_covered" in evaluation.failed_checks
+
+
+def test_long_part_names_are_accepted() -> None:
+    from app.mechanism.schemas import DesignProgram, ExpectedBoundingBox
+
+    source = """import cadquery as cq
+
+
+def build():
+    plate = cq.Workplane("XY").box(40, 40, 4)
+    finger = cq.Workplane("XY").box(10, 10, 10).translate((0, 25, 0))
+    return {
+        "parts": {
+            "mounting_plate_with_mounting_holes": plate,
+            "sliding_finger_left_assembly": finger,
+        },
+        "joints": [
+            {"name": "slide", "parent": "mounting_plate_with_mounting_holes",
+             "child": "sliding_finger_left_assembly", "kind": "prismatic",
+             "origin": [0, 0, 0], "axis": [0, 1, 0], "min_value": 0, "max_value": 5}
+        ],
+    }
+"""
+
+    execution = run_design_program(
+        DesignProgram(
+            program_id="program_001",
+            capability_id="assembly",
+            source=source,
+            expected_bbox=ExpectedBoundingBox(width_mm=60, height_mm=60, thickness_mm=20),
+        )
+    )
+
+    assert execution.status == "executed"
+    assert "mounting_plate_with_mounting_holes" in {part.name for part in execution.parts}

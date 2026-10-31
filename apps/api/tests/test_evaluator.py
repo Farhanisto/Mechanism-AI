@@ -2,7 +2,9 @@ from app.evaluation.evaluator import EVALUATOR_VERSION, evaluate_candidate
 from app.mechanism.schemas import (
     CandidateMetrics,
     EvaluationStatus,
+    HardConstraints,
     NormalizedBrief,
+    TargetMotion,
 )
 
 
@@ -96,3 +98,82 @@ def test_same_inputs_are_deterministic() -> None:
     second = evaluate_candidate(brief, metrics, "candidate_005")
 
     assert first == second
+
+
+def test_defaulted_motion_target_is_not_enforced() -> None:
+    from app.mechanism.schemas import RequirementSource
+
+    brief = NormalizedBrief(
+        target_motion=TargetMotion(travel_distance=50.0, trajectory_tolerance=5.0),
+        constraints=HardConstraints(max_footprint=100.0),
+        requirement_sources={
+            "target_motion": RequirementSource.DEFAULT_ASSUMPTION,
+            "constraints.max_footprint": RequirementSource.DEFAULT_ASSUMPTION,
+        },
+    )
+    metrics = CandidateMetrics(
+        travel_distance_mm=80.78,
+        footprint_mm=160.0,
+        trajectory_error_mm=15.3,
+        cycle_completed=True,
+        collision_free=True,
+        simulation_valid=True,
+    )
+
+    evaluation = evaluate_candidate(brief, metrics, "candidate_001")
+
+    assert evaluation.status is EvaluationStatus.PASSED
+    assert evaluation.failed_constraints == []
+    assert any("not enforced" in note for note in evaluation.diagnostic_notes)
+
+
+def test_stated_motion_target_is_enforced() -> None:
+    from app.mechanism.schemas import RequirementSource
+
+    brief = NormalizedBrief(
+        target_motion=TargetMotion(travel_distance=50.0, trajectory_tolerance=5.0),
+        constraints=HardConstraints(max_footprint=200.0),
+        requirement_sources={
+            "target_motion.travel_distance": RequirementSource.USER_PROVIDED,
+        },
+    )
+    metrics = CandidateMetrics(
+        travel_distance_mm=80.78,
+        footprint_mm=160.0,
+        trajectory_error_mm=4.0,
+        cycle_completed=True,
+        collision_free=True,
+        simulation_valid=True,
+    )
+
+    evaluation = evaluate_candidate(brief, metrics, "candidate_001")
+
+    assert evaluation.status is EvaluationStatus.FAILED
+    assert "travel_distance" in evaluation.failed_constraints
+
+
+def test_ai_proposed_motion_target_is_not_enforced() -> None:
+    from app.mechanism.schemas import RequirementSource
+
+    brief = NormalizedBrief(
+        target_motion=TargetMotion(travel_distance=50.0, trajectory_tolerance=5.0),
+        constraints=HardConstraints(max_footprint=10_000.0),
+        requirement_sources={
+            "target_motion.travel_distance": RequirementSource.AI_PROPOSED,
+            "target_motion.trajectory_tolerance": RequirementSource.AI_PROPOSED,
+            "constraints.max_footprint": RequirementSource.DEFAULT_ASSUMPTION,
+        },
+    )
+    metrics = CandidateMetrics(
+        travel_distance_mm=80.78,
+        footprint_mm=160.0,
+        trajectory_error_mm=15.3,
+        cycle_completed=True,
+        collision_free=True,
+        simulation_valid=True,
+    )
+
+    evaluation = evaluate_candidate(brief, metrics, "candidate_001")
+
+    assert evaluation.status is EvaluationStatus.PASSED
+    assert evaluation.failed_constraints == []

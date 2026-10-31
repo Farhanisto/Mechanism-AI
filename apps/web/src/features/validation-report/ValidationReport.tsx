@@ -1,8 +1,14 @@
-import type { CandidateRecord, DesignRun, SimulationResult } from "../../lib/api";
+import type {
+  CandidateRecord,
+  DesignRun,
+  ProgramRecord,
+  SimulationResult,
+} from "../../lib/api";
 
 interface ValidationReportProps {
   run: DesignRun | null;
   candidates: CandidateRecord[];
+  programs: ProgramRecord[];
   simulation: SimulationResult | null;
   expert: boolean;
 }
@@ -10,6 +16,7 @@ interface ValidationReportProps {
 export function ValidationReport({
   run,
   candidates,
+  programs,
   simulation,
   expert,
 }: ValidationReportProps) {
@@ -36,7 +43,7 @@ export function ValidationReport({
       ) : null}
 
       {run?.no_pass ? (
-        candidates.length === 0 ? (
+        candidates.length === 0 && programs.length === 0 ? (
           <div className="notice notice-error">
             <strong>Request not supported</strong>
             <span>

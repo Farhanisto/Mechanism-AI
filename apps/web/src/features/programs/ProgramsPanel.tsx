@@ -83,10 +83,10 @@ export function ProgramsPanel({ runId, programs, expert }: ProgramsPanelProps) {
                 <p className="version-note">
                   Joints:{" "}
                   {record.joints
-                    .map(
-                      (joint) =>
-                        `${joint.name} (${joint.parent} ↔ ${joint.child}, ${joint.min_deg}°…${joint.max_deg}°)`,
-                    )
+                    .map((joint) => {
+                      const unit = joint.kind === "prismatic" ? " mm" : "°";
+                      return `${joint.name} (${joint.parent} ↔ ${joint.child}, ${joint.kind} ${joint.min_value}${unit}…${joint.max_value}${unit})`;
+                    })
                     .join(" · ")}
                 </p>
               ) : null}

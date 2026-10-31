@@ -7,6 +7,8 @@ assessment is recorded on the brief and in the evidence bundle, and unresolved
 required checks block a pass.
 """
 
+import re
+
 from app.capabilities.registry import CapabilityRegistry, default_registry
 from app.mechanism.schemas import (
     CapabilityAssessment,
@@ -45,7 +47,7 @@ def detected_demand_categories(prompt: str) -> list[str]:
     return [
         check
         for check, terms in DEMAND_CATEGORIES
-        if any(term in lowered for term in terms)
+        if any(re.search(rf"\b{re.escape(term)}", lowered) for term in terms)
     ]
 
 
