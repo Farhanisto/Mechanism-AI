@@ -5,6 +5,7 @@ import {
   createDesignRun,
   getArtifact,
   getDesignRun,
+  listArtifacts,
   listCandidates,
   submitClarifications,
   subscribeToRun,
@@ -75,9 +76,10 @@ export function useDesignRun(): DesignRunState {
   const refresh = useCallback(async (runId: string) => {
     const seq = ++refreshSeqRef.current;
     try {
-      const [latestRun, latestCandidates] = await Promise.all([
+      const [latestRun, latestCandidates, manifest] = await Promise.all([
         getDesignRun(runId),
         listCandidates(runId),
+        listArtifacts(runId).catch(() => null),
       ]);
       if (seq !== refreshSeqRef.current) {
         return;
@@ -86,22 +88,24 @@ export function useDesignRun(): DesignRunState {
       setCandidates(latestCandidates);
 
       const plan = artifactPlan(latestRun);
+      const available = manifest ? new Set(manifest.map((entry) => entry.name)) : null;
+      const exists = (name: string) => available === null || available.has(name);
+      const simulationName = latestRun.final_candidate_id
+        ? `simulation_${latestRun.final_candidate_id}.json`
+        : null;
       const [latestBrief, latestPartBrief, latestPrograms, latestSimulation] =
         await Promise.all([
-          plan.brief
+          plan.brief && exists("brief.json")
             ? getArtifact<BriefArtifact>(runId, "brief.json").catch(() => null)
             : Promise.resolve(null),
-          plan.partBrief
+          plan.partBrief && exists("part_brief.json")
             ? getArtifact<PartBriefArtifact>(runId, "part_brief.json").catch(() => null)
             : Promise.resolve(null),
-          plan.programs
+          plan.programs && exists("programs.json")
             ? getArtifact<ProgramRecord[]>(runId, "programs.json").catch(() => null)
             : Promise.resolve(null),
-          plan.simulation && latestRun.final_candidate_id
-            ? getArtifact<SimulationResult>(
-                runId,
-                `simulation_${latestRun.final_candidate_id}.json`,
-              ).catch(() => null)
+          plan.simulation && simulationName && exists(simulationName)
+            ? getArtifact<SimulationResult>(runId, simulationName).catch(() => null)
             : Promise.resolve(null),
         ]);
       if (seq !== refreshSeqRef.current) {

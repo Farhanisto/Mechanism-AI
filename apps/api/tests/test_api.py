@@ -93,6 +93,20 @@ def test_fallback_candidate_passes_the_demo_targets(client: TestClient) -> None:
     assert metrics["simulation_valid"] is True
 
 
+def test_artifact_manifest_lists_only_written_files(client: TestClient) -> None:
+    run_id = client.post("/api/v1/design-runs", json={"prompt": PROMPT}).json()["run_id"]
+
+    manifest = client.get(f"/api/v1/design-runs/{run_id}/artifacts")
+    assert manifest.status_code == 200
+    names = {entry["name"] for entry in manifest.json()}
+    assert {"run.json", "brief.json", "candidates.json", "evidence.json"} <= names
+    assert "part_brief.json" not in names
+    assert "programs.json" not in names
+
+    missing = client.get("/api/v1/design-runs/run_missing/artifacts")
+    assert missing.status_code == 404
+
+
 def test_run_artifacts_are_persisted(client: TestClient, engine_name: str) -> None:
     run_id = client.post("/api/v1/design-runs", json={"prompt": PROMPT}).json()["run_id"]
 

@@ -3,6 +3,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 
+from app.mechanism.schemas import ArtifactManifestEntry
 from app.orchestration.design_run import DesignRunOrchestrator
 
 router = APIRouter(prefix="/design-runs", tags=["artifacts"])
@@ -16,6 +17,15 @@ _MEDIA_TYPES = {
 
 def _orchestrator(request: Request) -> DesignRunOrchestrator:
     return request.app.state.orchestrator
+
+
+@router.get("/{run_id}/artifacts", response_model=list[ArtifactManifestEntry])
+def list_artifacts(run_id: str, request: Request) -> list[ArtifactManifestEntry]:
+    """Names/hashes of artifacts that exist for this run (never 404s for optional files)."""
+    orchestrator = _orchestrator(request)
+    if orchestrator.store.get(run_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Design run not found")
+    return orchestrator.artifacts.manifest(run_id)
 
 
 @router.get("/{run_id}/artifacts/{name}")

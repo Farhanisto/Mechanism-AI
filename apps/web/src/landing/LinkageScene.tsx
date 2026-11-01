@@ -94,8 +94,27 @@ export function LinkageScene({ className = "", variant = "hero" }: LinkageSceneP
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
-    camera.position.set(0, 0.06, variant === "showcase" ? 7.4 : 6.2);
-    camera.lookAt(0, 0.02, 0);
+
+    const frameModel = () => {
+      // Fit the linkage bounding box into whichever canvas aspect we have, so the
+      // model never sits outside the hero on short or narrow viewports.
+      const halfWidth = 2.05;
+      const halfHeight = 1.45;
+      const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+      const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * camera.aspect);
+      const fitVertical = halfHeight / Math.tan(verticalFov / 2);
+      const fitHorizontal = halfWidth / Math.tan(horizontalFov / 2);
+      const fit = Math.max(fitVertical, fitHorizontal);
+      const distance =
+        variant === "showcase"
+          ? Math.min(Math.max(fit * 1.3, 5.6), 8.5)
+          : Math.min(Math.max(fit * 1.12, 5.2), 9.5);
+      camera.position.set(0, 0.06, distance);
+      camera.lookAt(0, 0.02, 0);
+      camera.updateProjectionMatrix();
+    };
+
+    frameModel();
 
     let renderer: THREE.WebGLRenderer;
     try {
@@ -268,6 +287,7 @@ export function LinkageScene({ className = "", variant = "hero" }: LinkageSceneP
       renderer.setSize(width, height, false);
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
+      frameModel();
     };
     resize();
     const observer = new ResizeObserver(resize);

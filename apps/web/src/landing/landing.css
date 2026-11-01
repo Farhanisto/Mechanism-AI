@@ -551,8 +551,8 @@ html {
 
 .hero-visual {
   position: relative;
+  min-width: 0;
   min-height: 480px;
-  aspect-ratio: 1 / 0.95;
 }
 
 .hero-visual::before {
@@ -584,6 +584,17 @@ html {
   inset: 0;
   width: 100%;
   height: 100%;
+  overflow: hidden;
+}
+
+/* Three.js sets the drawing buffer to CSS pixels * devicePixelRatio. Without
+   this rule the canvas keeps its buffer size in CSS pixels and overflows its
+   container on Retina/HiDPI screens. */
+.linkage-scene canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
 }
 
 .hero-canvas {
@@ -1587,22 +1598,6 @@ html {
     padding-top: 120px;
   }
 
-  .hero-inner {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 24px;
-  }
-
-  .hero-copy {
-    max-width: 720px;
-  }
-
-  .hero-visual {
-    width: 100%;
-    max-width: 640px;
-    margin: 0 auto;
-    min-height: 420px;
-  }
-
   .steps {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1639,6 +1634,24 @@ html {
   .footer-inner {
     grid-template-columns: minmax(0, 1fr);
     gap: 36px;
+  }
+}
+
+@media (max-width: 900px) {
+  .hero-inner {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+
+  .hero-copy {
+    max-width: 720px;
+  }
+
+  .hero-visual {
+    width: 100%;
+    max-width: 640px;
+    margin: 0 auto;
+    min-height: 420px;
   }
 }
 

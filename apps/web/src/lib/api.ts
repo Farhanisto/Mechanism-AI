@@ -326,6 +326,17 @@ export function submitClarifications(
   });
 }
 
+export interface ArtifactManifestEntry {
+  name: string;
+  sha256: string;
+  size_bytes: number;
+  written_at: string;
+}
+
+export function listArtifacts(runId: string): Promise<ArtifactManifestEntry[]> {
+  return request<ArtifactManifestEntry[]>(`/design-runs/${runId}/artifacts`);
+}
+
 export function getArtifact<T>(runId: string, name: string): Promise<T> {
   return request<T>(`/design-runs/${runId}/artifacts/${encodeURIComponent(name)}`);
 }
