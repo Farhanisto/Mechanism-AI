@@ -39,6 +39,21 @@ def test_health(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+    assert response.json()["ai_enabled"] is False
+
+
+def test_health_reports_a_configured_model(monkeypatch) -> None:
+    monkeypatch.setenv("MECHANISM_AI_META_API_KEY", "test-key")
+    monkeypatch.setenv("MECHANISM_AI_META_MODEL", "muse-spark-1.3")
+    get_settings.cache_clear()
+    try:
+        with TestClient(app) as test_client:
+            payload = test_client.get("/api/v1/health").json()
+    finally:
+        get_settings.cache_clear()
+
+    assert payload["ai_enabled"] is True
+    assert payload["model"] == "muse-spark-1.3"
 
 
 def test_create_run_completes_with_a_passing_candidate(client: TestClient) -> None:

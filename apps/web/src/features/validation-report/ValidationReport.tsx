@@ -43,7 +43,10 @@ export function ValidationReport({
       {run?.error_code ? (
         <div className="notice notice-error">
           <strong>{run.error_code}</strong>
-          <span>This run stopped honestly before producing an evaluated candidate.</span>
+          <span>
+            {run.error_message ??
+              "This run stopped honestly before producing an evaluated candidate."}
+          </span>
         </div>
       ) : null}
 

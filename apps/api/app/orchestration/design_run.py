@@ -570,6 +570,12 @@ class DesignRunOrchestrator:
         except _RunCancelled:
             self._finish_cancelled(run)
         except MetaModelError as exc:
+            logger.error(
+                "Run %s failed during a model call (%s): %s",
+                run_id,
+                exc.error_code,
+                exc,
+            )
             self._fail(run, exc.error_code, str(exc))
         except ValidationError:
             logger.exception("Model output failed schema validation for run %s", run_id)
@@ -1548,6 +1554,7 @@ class DesignRunOrchestrator:
         status: RunStatus | None = None,
         stage: Stage | None = None,
         error_code: str | None = None,
+        error_message: str | None = None,
         final_candidate_id: str | None = None,
         no_pass: bool | None = None,
         capability_id: str | None = None,
@@ -1560,6 +1567,8 @@ class DesignRunOrchestrator:
             run.capability_id = capability_id
         if error_code is not None:
             run.error_code = error_code
+        if error_message is not None:
+            run.error_message = error_message
         if final_candidate_id is not None:
             run.final_candidate_id = final_candidate_id
         if no_pass is not None:
@@ -1568,7 +1577,14 @@ class DesignRunOrchestrator:
         return self.store.update(run)
 
     def _fail(self, run: DesignRun, error_code: str, message: str) -> None:
-        self._update_run(run, status=RunStatus.FAILED, stage=Stage.FAILED, error_code=error_code)
+        logger.error("Design run %s failed: %s: %s", run.run_id, error_code, message)
+        self._update_run(
+            run,
+            status=RunStatus.FAILED,
+            stage=Stage.FAILED,
+            error_code=error_code,
+            error_message=message,
+        )
         try:
             self.artifacts.write_json(
                 run.run_id,

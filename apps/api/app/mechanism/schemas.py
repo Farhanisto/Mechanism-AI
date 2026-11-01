@@ -254,6 +254,7 @@ class DesignRun(BaseModel):
     created_at: datetime
     updated_at: datetime
     error_code: str | None = None
+    error_message: str | None = None
     final_candidate_id: str | None = None
     max_candidates: int = Field(default=3, ge=1, le=3)
     no_pass: bool = False

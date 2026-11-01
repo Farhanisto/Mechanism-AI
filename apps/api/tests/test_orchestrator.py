@@ -139,6 +139,36 @@ async def replay_events(broker: EventBroker, run_id: str) -> list[str]:
     return [event.event async for event in broker.stream(run_id) if event is not None]
 
 
+class FailingMetaClient:
+    @property
+    def is_configured(self) -> bool:
+        return True
+
+    async def complete_json(self, **kwargs: object) -> ModelCompletion:
+        raise MetaModelRequestError(
+            "The Meta model request failed with HTTP 401.",
+            status_code=401,
+        )
+
+    async def aclose(self) -> None:
+        return None
+
+
+async def test_model_failure_is_visible_on_the_run(tmp_path: Path) -> None:
+    orchestrator, broker = make_orchestrator(tmp_path, FailingMetaClient())
+    run = orchestrator.create_run(DesignRunCreateRequest(prompt=PROMPT))
+
+    await orchestrator.execute(run.run_id)
+
+    stored = orchestrator.store.get(run.run_id)
+    assert stored is not None
+    assert stored.status.value == "failed"
+    assert stored.error_code == "MODEL_REQUEST_FAILED"
+    assert stored.error_message is not None
+    assert "401" in stored.error_message
+    assert "run_failed" in await replay_events(broker, run.run_id)
+
+
 async def test_ai_pipeline_repairs_a_failed_candidate(tmp_path: Path) -> None:
     client = ScriptedMetaClient(
         candidate_payloads=[

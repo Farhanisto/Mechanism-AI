@@ -1,10 +1,15 @@
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.ai.meta_client import build_meta_client
+from app.ai.meta_client import (
+    DEFAULT_META_API_BASE_URL,
+    DEFAULT_META_MODEL,
+    build_meta_client,
+)
 from app.api import routes_artifacts, routes_design_runs, routes_health
 from app.config import get_settings
 from app.orchestration.design_run import DesignRunOrchestrator, EventBroker, RunStore
@@ -12,6 +17,8 @@ from app.persistence.artifacts import ArtifactStore
 from app.persistence.metadata import MetadataStore
 
 API_VERSION = "0.1.0"
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -24,6 +31,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     store.hydrate()
     events = EventBroker()
     meta_client = build_meta_client(settings)
+    if meta_client.is_configured:
+        logger.info(
+            "Meta model configured: model=%s base=%s",
+            settings.meta_model or DEFAULT_META_MODEL,
+            settings.meta_api_base_url or DEFAULT_META_API_BASE_URL,
+        )
+    else:
+        logger.warning(
+            "Meta model is NOT configured (MECHANISM_AI_META_API_KEY is unset). "
+            "Runs will use the deterministic fallback."
+        )
     app.state.orchestrator = DesignRunOrchestrator(
         store=store,
         events=events,

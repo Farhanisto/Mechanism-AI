@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Protocol
@@ -13,6 +14,7 @@ from app.config import Settings
 DEFAULT_META_API_BASE_URL = "https://api.meta.ai/v1"
 DEFAULT_META_MODEL = "muse-spark-1.3"
 _RETRYABLE_STATUS_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+logger = logging.getLogger(__name__)
 
 
 class MetaModelError(RuntimeError):
@@ -212,12 +214,16 @@ class HttpMetaModelClient:
             try:
                 response = await self._client.post(self._url, json=payload)
             except httpx.TimeoutException as exc:
+                logger.warning(
+                    "Meta model timeout at %s (attempt %s)", self._url, attempt + 1
+                )
                 last_error = MetaModelTimeoutError("The Meta model request timed out.")
                 if attempt < self._max_retries:
                     await self._backoff(attempt)
                     continue
                 raise last_error from exc
             except httpx.HTTPError as exc:
+                logger.warning("Meta model connection error at %s: %s", self._url, exc)
                 last_error = MetaModelRequestError(
                     "The Meta model request failed before a response was received."
                 )
@@ -229,6 +235,14 @@ class HttpMetaModelClient:
             if response.status_code < 400:
                 return response
 
+            body_snippet = " ".join(response.text.split())[:400]
+            logger.warning(
+                "Meta model HTTP %s at %s (model=%s): %s",
+                response.status_code,
+                self._url,
+                self._model,
+                body_snippet,
+            )
             last_error = MetaModelRequestError(
                 f"The Meta model request failed with HTTP {response.status_code}.",
                 status_code=response.status_code,

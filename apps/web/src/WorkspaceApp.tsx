@@ -11,7 +11,7 @@ import { RequirementsPanel } from "./features/requirements/RequirementsPanel";
 import { ValidationReport } from "./features/validation-report/ValidationReport";
 import { Workspace3D } from "./features/workspace/Workspace3D";
 import { Brand } from "./landing/Brand";
-import { artifactUrl } from "./lib/api";
+import { artifactUrl, getHealth } from "./lib/api";
 import { useDesignRun } from "./lib/useDesignRun";
 import "./demo.css";
 
@@ -47,11 +47,33 @@ export function WorkspaceApp() {
   } = useDesignRun();
   const [expert, setExpert] = useState(false);
   const [mobileSection, setMobileSection] = useState<MobileSection>("brief");
+  const [aiEnabled, setAiEnabled] = useState<boolean | null>(null);
 
   useEffect(() => {
     document.body.classList.add("demo-body");
     return () => document.body.classList.remove("demo-body");
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    getHealth()
+      .then((health) => {
+        if (active) {
+          setAiEnabled(health.ai_enabled ?? null);
+        }
+      })
+      .catch(() => null);
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const started = events.find((event) => event.event === "run_started");
+    if (started && typeof started.data.ai_enabled === "boolean") {
+      setAiEnabled(started.data.ai_enabled);
+    }
+  }, [events]);
 
   const finalRecord =
     (run?.final_candidate_id
@@ -177,6 +199,17 @@ export function WorkspaceApp() {
             </button>
           ))}
         </nav>
+
+        {aiEnabled === false ? (
+          <div className="demo-notice" role="status">
+            <strong>AI model disabled</strong>
+            <span>
+              This API has no Meta key configured, so runs use the deterministic fallback.
+              Set MECHANISM_AI_META_API_KEY on the API service to enable model-authored
+              design.
+            </span>
+          </div>
+        ) : null}
 
         {error ? (
           <p className="demo-error" role="alert">

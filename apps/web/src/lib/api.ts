@@ -34,6 +34,7 @@ export interface DesignRun {
   created_at: string;
   updated_at: string;
   error_code: string | null;
+  error_message?: string | null;
   final_candidate_id: string | null;
   max_candidates: number;
   no_pass: boolean;
@@ -331,6 +332,18 @@ export interface ArtifactManifestEntry {
   sha256: string;
   size_bytes: number;
   written_at: string;
+}
+
+export interface HealthStatus {
+  status: string;
+  service: string;
+  version: string;
+  ai_enabled?: boolean;
+  model?: string | null;
+}
+
+export function getHealth(): Promise<HealthStatus> {
+  return request<HealthStatus>("/health");
 }
 
 export function listArtifacts(runId: string): Promise<ArtifactManifestEntry[]> {
