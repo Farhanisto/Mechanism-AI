@@ -17,6 +17,7 @@ import {
   type SimulationResult,
   type StreamStatus,
 } from "./api";
+import { artifactPlan } from "./runArtifacts";
 
 export type RunStreamState = "idle" | StreamStatus | "ended";
 
@@ -84,12 +85,19 @@ export function useDesignRun(): DesignRunState {
       setRun(latestRun);
       setCandidates(latestCandidates);
 
+      const plan = artifactPlan(latestRun);
       const [latestBrief, latestPartBrief, latestPrograms, latestSimulation] =
         await Promise.all([
-          getArtifact<BriefArtifact>(runId, "brief.json").catch(() => null),
-          getArtifact<PartBriefArtifact>(runId, "part_brief.json").catch(() => null),
-          getArtifact<ProgramRecord[]>(runId, "programs.json").catch(() => null),
-          latestRun.final_candidate_id
+          plan.brief
+            ? getArtifact<BriefArtifact>(runId, "brief.json").catch(() => null)
+            : Promise.resolve(null),
+          plan.partBrief
+            ? getArtifact<PartBriefArtifact>(runId, "part_brief.json").catch(() => null)
+            : Promise.resolve(null),
+          plan.programs
+            ? getArtifact<ProgramRecord[]>(runId, "programs.json").catch(() => null)
+            : Promise.resolve(null),
+          plan.simulation && latestRun.final_candidate_id
             ? getArtifact<SimulationResult>(
                 runId,
                 `simulation_${latestRun.final_candidate_id}.json`,

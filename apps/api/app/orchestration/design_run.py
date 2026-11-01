@@ -987,6 +987,11 @@ class DesignRunOrchestrator:
         capability = self.capabilities.get(capability_id)
         capability_version = capability.version if capability is not None else "0.1.0"
 
+        # Publish an empty list immediately so a run that fails before its first
+        # attempt still has a readable programs.json (no spurious 404s).
+        if not resuming:
+            self.artifacts.write_json(run.run_id, "programs.json", [])
+
         if resuming:
             stored = self.artifacts.read_json(run.run_id, "part_brief.json") or {}
             source = stored.get("source", source)
