@@ -271,3 +271,36 @@ async def test_missing_default_model_raises_an_actionable_error() -> None:
 
     assert error.value.status_code == 404
     assert "MECHANISM_AI_META_MODEL" in str(error.value)
+
+
+async def test_catalog_fallback_when_the_default_is_also_missing() -> None:
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path.endswith("/models"):
+            return httpx.Response(
+                200,
+                json={"data": [{"id": "muse-spark-2.0"}, {"id": "muse-embed-1"}]},
+            )
+        payload = json.loads(request.content)
+        model = payload["model"]
+        requested.append(model)
+        if model in {"muse-wonder-9.9", DEFAULT_META_MODEL}:
+            return httpx.Response(
+                404,
+                json={"error": {"code": "model_not_found", "message": "not found"}},
+            )
+        return httpx.Response(200, json=completion_body())
+
+    client = HttpMetaModelClient(
+        api_key="key",
+        model="muse-wonder-9.9",
+        max_retries=0,
+        retry_backoff_seconds=0,
+        transport=httpx.MockTransport(handler),
+    )
+    completion = await complete(client)
+
+    assert requested == ["muse-wonder-9.9", DEFAULT_META_MODEL, "muse-spark-2.0"]
+    assert client.model == "muse-spark-2.0"
+    assert completion.payload == {"ok": True}

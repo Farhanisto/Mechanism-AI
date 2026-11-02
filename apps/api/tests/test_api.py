@@ -42,6 +42,13 @@ def test_health(client: TestClient) -> None:
     assert response.json()["ai_enabled"] is False
 
 
+def test_provider_models_without_a_key_is_empty(client: TestClient) -> None:
+    response = client.get("/api/v1/provider/models")
+
+    assert response.status_code == 200
+    assert response.json() == {"configured": False, "model": None, "models": []}
+
+
 def test_health_reports_a_configured_model(monkeypatch) -> None:
     monkeypatch.setenv("MECHANISM_AI_META_API_KEY", "test-key")
     monkeypatch.setenv("MECHANISM_AI_META_MODEL", "muse-spark-1.3")

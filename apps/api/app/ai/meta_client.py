@@ -62,6 +62,9 @@ class MetaModelClient(Protocol):
     @property
     def is_configured(self) -> bool: ...
 
+    @property
+    def model(self) -> str | None: ...
+
     async def complete_json(
         self,
         *,
@@ -72,6 +75,8 @@ class MetaModelClient(Protocol):
         reasoning_effort: str | None = None,
     ) -> ModelCompletion: ...
 
+    async def list_models(self) -> list[str]: ...
+
     async def aclose(self) -> None: ...
 
 
@@ -79,6 +84,10 @@ class UnconfiguredMetaModelClient:
     @property
     def is_configured(self) -> bool:
         return False
+
+    @property
+    def model(self) -> str | None:
+        return None
 
     async def complete_json(
         self,
@@ -93,6 +102,9 @@ class UnconfiguredMetaModelClient:
             "The Meta model adapter is not configured. Set "
             "MECHANISM_AI_META_API_KEY before enabling AI steps."
         )
+
+    async def list_models(self) -> list[str]:
+        return []
 
     async def aclose(self) -> None:
         return None
@@ -119,7 +131,10 @@ class HttpMetaModelClient:
         self._max_retries = max_retries
         self._max_output_tokens = max_output_tokens
         self._retry_backoff_seconds = retry_backoff_seconds
-        self._url = f"{base_url.rstrip('/')}/chat/completions"
+        self._base_url = base_url.rstrip("/")
+        self._url = f"{self._base_url}/chat/completions"
+        self._catalog_loaded = False
+        self._available_models: list[str] = []
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(timeout_seconds) if timeout_seconds else httpx.Timeout(None),
             headers={"Authorization": f"Bearer {api_key}"},
@@ -129,6 +144,32 @@ class HttpMetaModelClient:
     @property
     def is_configured(self) -> bool:
         return True
+
+    @property
+    def model(self) -> str | None:
+        return self._model
+
+    async def list_models(self) -> list[str]:
+        response = await self._client.get(f"{self._base_url}/models", timeout=10.0)
+        if response.status_code >= 400:
+            snippet = " ".join(response.text.split())[:300]
+            raise MetaModelRequestError(
+                f"The Meta model list request failed with HTTP {response.status_code}.",
+                status_code=response.status_code,
+                response_body=snippet,
+            )
+        try:
+            body = response.json()
+        except ValueError:
+            return []
+        data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(data, list):
+            return []
+        return [
+            str(item["id"])
+            for item in data
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        ]
 
     async def complete_json(
         self,
@@ -162,41 +203,7 @@ class HttpMetaModelClient:
         try:
             response = await self._post_with_retries(request_payload)
         except MetaModelRequestError as exc:
-            body = (exc.response_body or "").lower()
-            model_missing = (
-                exc.status_code == 404
-                and ("model_not_found" in body or "model was not found" in body)
-            )
-            if model_missing and self._model != DEFAULT_META_MODEL:
-                logger.warning(
-                    "Meta model %r is not available for this API key; falling back to %r.",
-                    self._model,
-                    DEFAULT_META_MODEL,
-                )
-                try:
-                    response = await self._post_with_retries(
-                        {**request_payload, "model": DEFAULT_META_MODEL}
-                    )
-                except MetaModelRequestError as fallback_exc:
-                    raise MetaModelRequestError(
-                        f"The configured model {self._model!r} was not found, and the "
-                        f"fallback model {DEFAULT_META_MODEL!r} also failed with HTTP "
-                        f"{fallback_exc.status_code}. Set MECHANISM_AI_META_MODEL to a "
-                        "model your API key can access.",
-                        status_code=fallback_exc.status_code,
-                        response_body=fallback_exc.response_body,
-                    ) from fallback_exc
-                self._model = DEFAULT_META_MODEL
-            elif exc.status_code == 404:
-                raise MetaModelRequestError(
-                    f"The configured Meta model {self._model!r} was not found or is not "
-                    "available for this API key. Set MECHANISM_AI_META_MODEL to a model "
-                    f"your key can access (default: {DEFAULT_META_MODEL}).",
-                    status_code=exc.status_code,
-                    response_body=exc.response_body,
-                ) from exc
-            else:
-                raise
+            response = await self._retry_after_missing_model(request_payload, exc)
         latency_ms = (perf_counter() - started) * 1000.0
 
         try:
@@ -251,6 +258,84 @@ class HttpMetaModelClient:
             latency_ms=latency_ms,
             usage=usage if isinstance(usage, dict) else {},
         )
+
+    async def _retry_after_missing_model(
+        self, payload: dict[str, Any], error: MetaModelRequestError
+    ) -> httpx.Response:
+        if error.status_code != 404:
+            raise error
+        body = (error.response_body or "").lower()
+        if "model" not in body and "not found" not in body:
+            raise error
+
+        candidates: list[str] = []
+        if self._model != DEFAULT_META_MODEL:
+            candidates.append(DEFAULT_META_MODEL)
+
+        last_error = error
+
+        async def attempt(candidate: str) -> httpx.Response | None:
+            nonlocal last_error
+            logger.warning(
+                "Meta model %r is not available for this API key; retrying with %r.",
+                self._model,
+                candidate,
+            )
+            try:
+                response = await self._post_with_retries({**payload, "model": candidate})
+            except MetaModelRequestError as exc:
+                last_error = exc
+                return None
+            self._model = candidate
+            return response
+
+        for candidate in candidates:
+            response = await attempt(candidate)
+            if response is not None:
+                return response
+
+        # The default was also rejected (or already configured): ask the provider
+        # which models this key can actually use.
+        available = await self._load_available_models()
+        chosen = _choose_model(available, exclude={self._model, *candidates})
+        if chosen is not None:
+            response = await attempt(chosen)
+            if response is not None:
+                return response
+
+        available_hint = (
+            f" Available models for this API key: {', '.join(available[:12])}."
+            if available
+            else ""
+        )
+        provider_hint = (
+            f" Provider response: {last_error.response_body[:300]}"
+            if last_error.response_body
+            else ""
+        )
+        raise MetaModelRequestError(
+            f"The configured Meta model {self._model!r} was not found or is not "
+            "available for this API key. Set MECHANISM_AI_META_MODEL to a model your "
+            f"key can access.{available_hint}{provider_hint}",
+            status_code=last_error.status_code or 404,
+            response_body=last_error.response_body,
+        ) from last_error
+
+    async def _load_available_models(self) -> list[str]:
+        if self._catalog_loaded:
+            return self._available_models
+        self._catalog_loaded = True
+        try:
+            self._available_models = await self.list_models()
+        except Exception as exc:  # noqa: BLE001 - discovery must never mask the model error
+            logger.warning("Could not list Meta models: %s", exc)
+            self._available_models = []
+        if self._available_models:
+            logger.info(
+                "Available Meta models for this API key: %s",
+                ", ".join(self._available_models[:20]),
+            )
+        return self._available_models
 
     async def _post_with_retries(self, payload: dict[str, Any]) -> httpx.Response:
         last_error: MetaModelError | None = None
@@ -316,6 +401,41 @@ class HttpMetaModelClient:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+def _choose_model(available: list[str], *, exclude: set[str]) -> str | None:
+    candidates = [model for model in available if model not in exclude]
+    if not candidates:
+        return None
+
+    def score(model: str) -> tuple[int, str]:
+        lowered = model.lower()
+        if any(
+            token in lowered
+            for token in (
+                "embed",
+                "whisper",
+                "tts",
+                "audio",
+                "image",
+                "vision",
+                "rerank",
+                "voice",
+                "transcribe",
+                "speech",
+                "video",
+                "ocr",
+                "sam-",
+            )
+        ):
+            return (3, lowered)
+        if "spark" in lowered:
+            return (0, lowered)
+        if "muse" in lowered:
+            return (1, lowered)
+        return (2, lowered)
+
+    return min(candidates, key=score)
 
 
 def build_meta_client(settings: Settings) -> MetaModelClient:
