@@ -13,6 +13,15 @@ from app.config import Settings
 
 DEFAULT_META_API_BASE_URL = "https://api.meta.ai/v1"
 DEFAULT_META_MODEL = "muse-spark-1.3"
+# Some OpenAI-compatible providers return an empty /models catalog for valid
+# keys. Try these known chat models before giving up.
+_KNOWN_FALLBACK_MODELS = (
+    "muse-spark-1.3-contributor",
+    "muse-spark-1.2",
+    "muse-spark-1.2-contributor",
+    "muse-spark-1.1",
+    "muse-wonder-1.0",
+)
 _MAX_OUTPUT_TOKEN_CEILING = 32768
 _RETRYABLE_STATUS_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 _ACCOUNT_RESTRICTION_HINTS = (
@@ -174,15 +183,14 @@ class HttpMetaModelClient:
         try:
             body = response.json()
         except ValueError:
+            snippet = " ".join(response.text.split())[:200]
+            logger.warning("Meta model list response was not JSON: %s", snippet)
             return []
-        data = body.get("data") if isinstance(body, dict) else None
-        if not isinstance(data, list):
-            return []
-        return [
-            str(item["id"])
-            for item in data
-            if isinstance(item, dict) and isinstance(item.get("id"), str)
-        ]
+        models = _extract_model_ids(body)
+        if not models:
+            snippet = " ".join(response.text.split())[:200]
+            logger.warning("Meta model list response contained no usable models: %s", snippet)
+        return models
 
     async def complete_json(
         self,
@@ -305,6 +313,7 @@ class HttpMetaModelClient:
             candidates.append(DEFAULT_META_MODEL)
 
         attempted = {failed_model, *candidates}
+        tried: list[str] = [failed_model]
         last_error = error
 
         async def attempt(candidate: str) -> httpx.Response | None:
@@ -314,6 +323,7 @@ class HttpMetaModelClient:
                 failed_model,
                 candidate,
             )
+            tried.append(candidate)
             try:
                 response = await self._post_with_retries({**payload, "model": candidate})
             except MetaModelRequestError as exc:
@@ -330,7 +340,15 @@ class HttpMetaModelClient:
         # The default was also rejected (or already configured): ask the provider
         # which models this key can actually use.
         available = await self._load_available_models()
-        for chosen in _rank_models(available, exclude=attempted):
+        candidates = _rank_models(available, exclude=attempted)
+        # Some providers return an empty catalog even though other models work,
+        # so fall back to a small list of known chat models.
+        candidates.extend(
+            model
+            for model in _KNOWN_FALLBACK_MODELS
+            if model not in attempted and model not in candidates
+        )
+        for chosen in candidates:
             response = await attempt(chosen)
             if response is not None:
                 return response
@@ -339,10 +357,11 @@ class HttpMetaModelClient:
             f" Available models for this API key: {', '.join(available[:12])}."
             if available
             else (
-                f" The model catalog at {self._base_url}/models could not be listed; "
-                "verify MECHANISM_AI_META_API_BASE_URL and the API key."
+                f" The provider's model catalog at {self._base_url}/models returned "
+                "no models; verify MECHANISM_AI_META_API_BASE_URL and the API key."
             )
         )
+        tried_hint = f" Tried models: {', '.join(dict.fromkeys(tried))}."
         provider_hint = (
             f" Provider response: {last_error.response_body[:300]}"
             if last_error.response_body
@@ -351,7 +370,7 @@ class HttpMetaModelClient:
         raise MetaModelRequestError(
             f"The configured Meta model {failed_model!r} was not found or is not "
             "available for this API key. Set MECHANISM_AI_META_MODEL to a model your "
-            f"key can access.{available_hint}{provider_hint}",
+            f"key can access.{available_hint}{tried_hint}{provider_hint}",
             status_code=last_error.status_code or 404,
             response_body=last_error.response_body,
         ) from last_error
@@ -451,6 +470,26 @@ class HttpMetaModelClient:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+def _extract_model_ids(body: Any) -> list[str]:
+    if not isinstance(body, dict):
+        return []
+    data: Any = body.get("data", body.get("models", body.get("result")))
+    if isinstance(data, dict):
+        data = data.get("models", data.get("data"))
+    if not isinstance(data, list):
+        return []
+
+    models: list[str] = []
+    for item in data:
+        if isinstance(item, str):
+            models.append(item)
+        elif isinstance(item, dict):
+            value = item.get("id") or item.get("name") or item.get("model")
+            if isinstance(value, str):
+                models.append(value)
+    return models
 
 
 def _content_text(content: Any) -> str | None:

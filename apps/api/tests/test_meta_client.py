@@ -355,6 +355,52 @@ async def test_catalog_fallback_when_the_default_is_also_missing() -> None:
     assert completion.payload == {"ok": True}
 
 
+async def test_empty_catalog_uses_known_fallback_models() -> None:
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": []})
+        payload = json.loads(request.content)
+        model = payload["model"]
+        requested.append(model)
+        if model != "muse-wonder-1.0":
+            return httpx.Response(
+                404,
+                json={"error": {"code": "model_not_found", "message": "not found"}},
+            )
+        return httpx.Response(200, json=completion_body())
+
+    client = HttpMetaModelClient(
+        api_key="key",
+        model=DEFAULT_META_MODEL,
+        max_retries=0,
+        retry_backoff_seconds=0,
+        transport=httpx.MockTransport(handler),
+    )
+    completion = await complete(client)
+
+    assert requested[-1] == "muse-wonder-1.0"
+    assert completion.payload == {"ok": True}
+    assert client.model == "muse-wonder-1.0"
+
+
+async def test_list_models_accepts_alternate_catalog_shapes() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"models": [{"name": "muse-spark-1.3"}, "muse-spark-1.2"]},
+        )
+
+    client = HttpMetaModelClient(api_key="key", transport=httpx.MockTransport(handler))
+    try:
+        models = await client.list_models()
+    finally:
+        await client.aclose()
+
+    assert models == ["muse-spark-1.3", "muse-spark-1.2"]
+
+
 async def test_concurrent_model_discovery_loads_the_catalog_once() -> None:
     catalog_calls = 0
 
@@ -413,7 +459,7 @@ async def test_catalog_failure_is_not_cached() -> None:
                 return httpx.Response(503, text="busy")
             return httpx.Response(200, json={"data": [{"id": "muse-spark-2.0"}]})
         payload = json.loads(request.content)
-        if payload["model"] == DEFAULT_META_MODEL:
+        if payload["model"] != "muse-spark-2.0":
             return httpx.Response(
                 404,
                 json={"error": {"code": "model_not_found", "message": "not found"}},
