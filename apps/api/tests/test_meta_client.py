@@ -6,6 +6,7 @@ from app.ai.meta_client import (
     DEFAULT_META_API_BASE_URL,
     DEFAULT_META_MODEL,
     HttpMetaModelClient,
+    MetaModelAccountError,
     MetaModelNotConfigured,
     MetaModelRequestError,
     MetaModelResponseError,
@@ -304,3 +305,37 @@ async def test_catalog_fallback_when_the_default_is_also_missing() -> None:
     assert requested == ["muse-wonder-9.9", DEFAULT_META_MODEL, "muse-spark-2.0"]
     assert client.model == "muse-spark-2.0"
     assert completion.payload == {"ok": True}
+
+
+async def test_account_restriction_is_actionable_and_not_fallen_back() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            403,
+            json={
+                "error": {
+                    "code": "account_restricted",
+                    "message": (
+                        "Your account is restricted. We weren't able to place a "
+                        "temporary hold on your payment method."
+                    ),
+                }
+            },
+        )
+
+    client = HttpMetaModelClient(
+        api_key="key",
+        model="muse-wonder-1.0",
+        max_retries=2,
+        retry_backoff_seconds=0,
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(MetaModelAccountError) as error:
+        await complete(client)
+
+    assert error.value.error_code == "MODEL_ACCOUNT_RESTRICTED"
+    assert "payment method" in str(error.value).lower()
+    assert calls == 1

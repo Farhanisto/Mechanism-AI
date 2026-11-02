@@ -14,6 +14,13 @@ from app.config import Settings
 DEFAULT_META_API_BASE_URL = "https://api.meta.ai/v1"
 DEFAULT_META_MODEL = "muse-spark-1.3"
 _RETRYABLE_STATUS_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+_ACCOUNT_RESTRICTION_HINTS = (
+    "account is restricted",
+    "payment method",
+    "temporary hold",
+    "billing",
+    "update it to keep making requests",
+)
 logger = logging.getLogger(__name__)
 
 
@@ -44,6 +51,10 @@ class MetaModelRequestError(MetaModelError):
         super().__init__(message)
         self.status_code = status_code
         self.response_body = response_body
+
+
+class MetaModelAccountError(MetaModelError):
+    error_code = "MODEL_ACCOUNT_RESTRICTED"
 
 
 class MetaModelResponseError(MetaModelError):
@@ -365,6 +376,19 @@ class HttpMetaModelClient:
                 return response
 
             body_snippet = " ".join(response.text.split())[:400]
+            if _is_account_restriction(response.status_code, body_snippet):
+                logger.error(
+                    "Meta API account restriction (HTTP %s): %s",
+                    response.status_code,
+                    body_snippet,
+                )
+                raise MetaModelAccountError(
+                    "The Meta API account is restricted: "
+                    f"{body_snippet or 'the provider rejected the request'}. "
+                    "Update the payment method and billing details in the Meta API "
+                    "dashboard, then retry. Free credits still require a valid payment "
+                    "method for the provider's temporary hold."
+                )
             logger.warning(
                 "Meta model HTTP %s at %s (model=%s): %s",
                 response.status_code,
@@ -401,6 +425,13 @@ class HttpMetaModelClient:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+def _is_account_restriction(status_code: int, body: str) -> bool:
+    if status_code == 402:
+        return True
+    lowered = body.lower()
+    return any(hint in lowered for hint in _ACCOUNT_RESTRICTION_HINTS)
 
 
 def _choose_model(available: list[str], *, exclude: set[str]) -> str | None:

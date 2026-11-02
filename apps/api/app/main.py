@@ -1,3 +1,4 @@
+import hashlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -32,10 +33,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     events = EventBroker()
     meta_client = build_meta_client(settings)
     if meta_client.is_configured:
+        key = settings.meta_api_key.get_secret_value() if settings.meta_api_key else ""
+        fingerprint = hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
         logger.info(
-            "Meta model configured: model=%s base=%s",
+            "Meta model configured: model=%s base=%s key_fingerprint=%s",
             settings.meta_model or DEFAULT_META_MODEL,
             settings.meta_api_base_url or DEFAULT_META_API_BASE_URL,
+            fingerprint,
         )
     else:
         logger.warning(
