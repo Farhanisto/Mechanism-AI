@@ -13,6 +13,7 @@ from app.config import Settings
 
 DEFAULT_META_API_BASE_URL = "https://api.meta.ai/v1"
 DEFAULT_META_MODEL = "muse-spark-1.3"
+_MAX_OUTPUT_TOKEN_CEILING = 32768
 _RETRYABLE_STATUS_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 _ACCOUNT_RESTRICTION_HINTS = (
     "account is restricted",
@@ -191,38 +192,84 @@ class HttpMetaModelClient:
         schema_name: str,
         reasoning_effort: str | None = None,
     ) -> ModelCompletion:
-        request_payload: dict[str, Any] = {
-            "model": self._model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": schema_name,
-                    "strict": True,
-                    "schema": schema,
-                },
-            },
-            "reasoning_effort": reasoning_effort or self._reasoning_effort,
-            "max_completion_tokens": self._max_output_tokens,
-            "temperature": 0.2,
-        }
-
         started = perf_counter()
-        try:
-            response = await self._post_with_retries(request_payload)
-        except MetaModelRequestError as exc:
-            response = await self._retry_after_missing_model(request_payload, exc)
-        latency_ms = (perf_counter() - started) * 1000.0
+        max_output_tokens = self._max_output_tokens
+        truncation_retried = False
 
+        while True:
+            request_payload: dict[str, Any] = {
+                "model": self._model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema_name,
+                        "strict": True,
+                        "schema": schema,
+                    },
+                },
+                "reasoning_effort": reasoning_effort or self._reasoning_effort,
+                "max_completion_tokens": max_output_tokens,
+                "temperature": 0.2,
+            }
+
+            try:
+                response = await self._post_with_retries(request_payload)
+            except MetaModelRequestError as exc:
+                response = await self._retry_after_missing_model(request_payload, exc)
+
+            body, choice, message = self._decode_completion(response)
+            if message.get("refusal"):
+                raise MetaModelResponseError(
+                    "The Meta model declined the structured-output request."
+                )
+
+            content = _content_text(message.get("content"))
+            payload = _parse_json_object(content)
+            if payload is not None:
+                usage = body.get("usage")
+                response_model = body.get("model")
+                return ModelCompletion(
+                    payload=payload,
+                    model=(response_model if isinstance(response_model, str) else self._model),
+                    latency_ms=(perf_counter() - started) * 1000.0,
+                    usage=usage if isinstance(usage, dict) else {},
+                )
+
+            if choice.get("finish_reason") == "length":
+                next_budget = min(max_output_tokens * 2, _MAX_OUTPUT_TOKEN_CEILING)
+                if not truncation_retried and next_budget > max_output_tokens:
+                    truncation_retried = True
+                    max_output_tokens = next_budget
+                    logger.warning(
+                        "Meta model output was truncated at %s tokens; retrying with %s tokens.",
+                        max_output_tokens // 2,
+                        max_output_tokens,
+                    )
+                    continue
+                raise MetaModelResponseError(
+                    "The Meta model output was truncated before completing the "
+                    f"JSON object even after raising the limit to {max_output_tokens} "
+                    "tokens. Increase MECHANISM_AI_META_MAX_OUTPUT_TOKENS or use a "
+                    "smaller request."
+                )
+
+            if not content or not content.strip():
+                raise MetaModelResponseError("The Meta model returned empty structured output.")
+            raise MetaModelResponseError(
+                "The Meta model output did not match the requested JSON schema."
+            )
+
+    def _decode_completion(
+        self, response: httpx.Response
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
         try:
             body = response.json()
         except ValueError as exc:
-            raise MetaModelResponseError(
-                "The Meta model response was not valid JSON."
-            ) from exc
+            raise MetaModelResponseError("The Meta model response was not valid JSON.") from exc
         if not isinstance(body, dict):
             raise MetaModelResponseError("The Meta model response had an unexpected shape.")
 
@@ -230,45 +277,12 @@ class HttpMetaModelClient:
         if not isinstance(choices, list) or not choices:
             raise MetaModelResponseError("The Meta model response contained no choices.")
         choice = choices[0]
-        message = choice.get("message") if isinstance(choice, dict) else None
+        if not isinstance(choice, dict):
+            raise MetaModelResponseError("The Meta model response contained no choices.")
+        message = choice.get("message")
         if not isinstance(message, dict):
             raise MetaModelResponseError("The Meta model response contained no message.")
-        if message.get("refusal"):
-            raise MetaModelResponseError("The Meta model declined the structured-output request.")
-        if choice.get("finish_reason") == "length":
-            raise MetaModelResponseError(
-                "The Meta model output was truncated before completing the JSON object."
-            )
-
-        content = message.get("content")
-        if isinstance(content, list):
-            content = "".join(
-                part.get("text", "")
-                for part in content
-                if isinstance(part, dict) and isinstance(part.get("text"), str)
-            )
-        if not isinstance(content, str) or not content.strip():
-            raise MetaModelResponseError("The Meta model returned empty structured output.")
-
-        try:
-            payload = json.loads(content)
-        except json.JSONDecodeError as exc:
-            raise MetaModelResponseError(
-                "The Meta model output did not match the requested JSON schema."
-            ) from exc
-        if not isinstance(payload, dict):
-            raise MetaModelResponseError(
-                "The Meta model output must be a JSON object matching the schema."
-            )
-
-        usage = body.get("usage")
-        response_model = body.get("model")
-        return ModelCompletion(
-            payload=payload,
-            model=response_model if isinstance(response_model, str) else self._model,
-            latency_ms=latency_ms,
-            usage=usage if isinstance(usage, dict) else {},
-        )
+        return body, choice, message
 
     async def _retry_after_missing_model(
         self, payload: dict[str, Any], error: MetaModelRequestError
@@ -315,9 +329,7 @@ class HttpMetaModelClient:
                 return response
 
         available_hint = (
-            f" Available models for this API key: {', '.join(available[:12])}."
-            if available
-            else ""
+            f" Available models for this API key: {', '.join(available[:12])}." if available else ""
         )
         provider_hint = (
             f" Provider response: {last_error.response_body[:300]}"
@@ -354,9 +366,7 @@ class HttpMetaModelClient:
             try:
                 response = await self._client.post(self._url, json=payload)
             except httpx.TimeoutException as exc:
-                logger.warning(
-                    "Meta model timeout at %s (attempt %s)", self._url, attempt + 1
-                )
+                logger.warning("Meta model timeout at %s (attempt %s)", self._url, attempt + 1)
                 last_error = MetaModelTimeoutError("The Meta model request timed out.")
                 if attempt < self._max_retries:
                     await self._backoff(attempt)
@@ -401,10 +411,7 @@ class HttpMetaModelClient:
                 status_code=response.status_code,
                 response_body=body_snippet,
             )
-            if (
-                response.status_code in _RETRYABLE_STATUS_CODES
-                and attempt < self._max_retries
-            ):
+            if response.status_code in _RETRYABLE_STATUS_CODES and attempt < self._max_retries:
                 await self._backoff(attempt, retry_after=response.headers.get("Retry-After"))
                 continue
             raise last_error
@@ -425,6 +432,26 @@ class HttpMetaModelClient:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+def _content_text(content: Any) -> str | None:
+    if isinstance(content, list):
+        return "".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        )
+    return content if isinstance(content, str) else None
+
+
+def _parse_json_object(content: str | None) -> dict[str, Any] | None:
+    if not isinstance(content, str) or not content.strip():
+        return None
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _is_account_restriction(status_code: int, body: str) -> bool:

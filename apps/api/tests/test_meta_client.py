@@ -154,12 +154,59 @@ async def test_truncated_output_raises_clear_response_error() -> None:
         }
     ]
 
+    calls = 0
+
     def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
         return httpx.Response(200, json=body)
 
     client = HttpMetaModelClient(api_key="key", transport=httpx.MockTransport(handler))
     with pytest.raises(MetaModelResponseError, match="truncated"):
         await complete(client)
+
+    assert calls == 2
+
+
+async def test_truncated_output_retries_with_a_larger_budget() -> None:
+    budgets: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        budgets.append(payload["max_completion_tokens"])
+        if len(budgets) == 1:
+            body = completion_body()
+            body["choices"] = [
+                {
+                    "finish_reason": "length",
+                    "message": {"role": "assistant", "content": '{"ok": '},
+                }
+            ]
+            return httpx.Response(200, json=body)
+        return httpx.Response(200, json=completion_body())
+
+    client = HttpMetaModelClient(
+        api_key="key",
+        max_output_tokens=1024,
+        transport=httpx.MockTransport(handler),
+    )
+    completion = await complete(client)
+
+    assert budgets == [1024, 2048]
+    assert completion.payload == {"ok": True}
+
+
+async def test_length_finish_reason_with_valid_json_is_accepted() -> None:
+    body = completion_body()
+    body["choices"][0]["finish_reason"] = "length"  # type: ignore[index]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=body)
+
+    client = HttpMetaModelClient(api_key="key", transport=httpx.MockTransport(handler))
+    completion = await complete(client)
+
+    assert completion.payload == {"ok": True}
 
 
 async def test_content_parts_are_joined() -> None:
