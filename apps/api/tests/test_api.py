@@ -46,7 +46,13 @@ def test_provider_models_without_a_key_is_empty(client: TestClient) -> None:
     response = client.get("/api/v1/provider/models")
 
     assert response.status_code == 200
-    assert response.json() == {"configured": False, "model": None, "models": []}
+    assert response.json() == {
+        "configured": False,
+        "model": None,
+        "models": [],
+        "base_url": "https://api.meta.ai/v1",
+        "key_fingerprint": None,
+    }
 
 
 def test_health_reports_a_configured_model(monkeypatch) -> None:
@@ -170,9 +176,7 @@ def test_no_pass_run_completes_without_claiming_success(client: TestClient) -> N
 
 def test_missing_run_and_artifact_return_404(client: TestClient) -> None:
     assert client.get("/api/v1/design-runs/run_missing").status_code == 404
-    assert (
-        client.get("/api/v1/design-runs/run_missing/artifacts/run.json").status_code == 404
-    )
+    assert client.get("/api/v1/design-runs/run_missing/artifacts/run.json").status_code == 404
 
 
 def test_artifact_name_traversal_is_rejected(client: TestClient) -> None:
@@ -244,9 +248,7 @@ def test_clarifications_pause_and_resume_without_an_ai_call(client: TestClient) 
     assert run["no_pass"] is False
     assert run["clarification_answers"] == {question_id: "yes"}
     evidence = client.get(f"/api/v1/design-runs/{run_id}/evidence").json()
-    assert evidence["evidence_bundle"]["run"]["clarification_answers"] == {
-        question_id: "yes"
-    }
+    assert evidence["evidence_bundle"]["run"]["clarification_answers"] == {question_id: "yes"}
 
 
 def test_clarifications_endpoint_conflicts(client: TestClient) -> None:
@@ -294,9 +296,7 @@ def test_clarification_accepts_free_text_answers(client: TestClient) -> None:
     response = client.post(
         f"/api/v1/design-runs/{run_id}/clarifications",
         json={
-            "answers": {
-                question_id: "yes, geometric and kinematic checks are sufficient for now"
-            }
+            "answers": {question_id: "yes, geometric and kinematic checks are sufficient for now"}
         },
     )
 
