@@ -23,6 +23,8 @@ _KNOWN_FALLBACK_MODELS = (
     "muse-wonder-1.0",
 )
 _MAX_OUTPUT_TOKEN_CEILING = 32768
+_MODEL_LIST_ATTEMPTS = 3
+_MODEL_NOT_FOUND_ATTEMPTS = 3
 _RETRYABLE_STATUS_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 _ACCOUNT_RESTRICTION_HINTS = (
     "account is restricted",
@@ -172,25 +174,35 @@ class HttpMetaModelClient:
         return self._model
 
     async def list_models(self) -> list[str]:
-        response = await self._client.get(f"{self._base_url}/models", timeout=10.0)
-        if response.status_code >= 400:
-            snippet = " ".join(response.text.split())[:300]
-            raise MetaModelRequestError(
-                f"The Meta model list request failed with HTTP {response.status_code}.",
-                status_code=response.status_code,
-                response_body=snippet,
-            )
-        try:
-            body = response.json()
-        except ValueError:
+        for attempt in range(_MODEL_LIST_ATTEMPTS):
+            response = await self._client.get(f"{self._base_url}/models", timeout=10.0)
+            if response.status_code >= 400:
+                snippet = " ".join(response.text.split())[:300]
+                raise MetaModelRequestError(
+                    f"The Meta model list request failed with HTTP {response.status_code}.",
+                    status_code=response.status_code,
+                    response_body=snippet,
+                )
             snippet = " ".join(response.text.split())[:200]
-            logger.warning("Meta model list response was not JSON: %s", snippet)
-            return []
-        models = _extract_model_ids(body)
-        if not models:
-            snippet = " ".join(response.text.split())[:200]
-            logger.warning("Meta model list response contained no usable models: %s", snippet)
-        return models
+            try:
+                body = response.json()
+            except ValueError:
+                logger.warning("Meta model list response was not JSON: %s", snippet)
+                models: list[str] = []
+            else:
+                models = _extract_model_ids(body)
+                if not models:
+                    logger.warning(
+                        "Meta model list response contained no usable models: %s",
+                        snippet,
+                    )
+            if models:
+                return models
+            # Some provider deployments intermittently return an empty catalog
+            # for a valid key; retry before treating the key as model-less.
+            if attempt + 1 < _MODEL_LIST_ATTEMPTS:
+                await self._backoff(attempt)
+        return []
 
     async def complete_json(
         self,
@@ -296,10 +308,7 @@ class HttpMetaModelClient:
     async def _retry_after_missing_model(
         self, payload: dict[str, Any], error: MetaModelRequestError
     ) -> httpx.Response:
-        if error.status_code != 404:
-            raise error
-        body = (error.response_body or "").lower()
-        if "model" not in body and "not found" not in body:
+        if not _is_missing_model_error(error):
             raise error
 
         # Use the model from the failed request rather than the mutable client
@@ -340,6 +349,31 @@ class HttpMetaModelClient:
         # The default was also rejected (or already configured): ask the provider
         # which models this key can actually use.
         available = await self._load_available_models()
+
+        # Some provider deployments intermittently report a valid model as
+        # missing. Retry the original model when the catalog says it should
+        # exist, or when the catalog itself came back empty (and is therefore
+        # unreliable).
+        if not available or failed_model in available:
+            for attempt_number in range(1, _MODEL_NOT_FOUND_ATTEMPTS):
+                logger.warning(
+                    "Meta model %r was reported missing but may be available; "
+                    "retrying (attempt %s/%s).",
+                    failed_model,
+                    attempt_number + 1,
+                    _MODEL_NOT_FOUND_ATTEMPTS,
+                )
+                await self._backoff(attempt_number - 1)
+                try:
+                    response = await self._post_with_retries({**payload, "model": failed_model})
+                except MetaModelRequestError as exc:
+                    last_error = exc
+                    if not _is_missing_model_error(exc):
+                        break
+                    continue
+                self._model = failed_model
+                return response
+
         candidates = _rank_models(available, exclude=attempted)
         # Some providers return an empty catalog even though other models work,
         # so fall back to a small list of known chat models.
@@ -510,6 +544,13 @@ def _parse_json_object(content: str | None) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _is_missing_model_error(error: MetaModelRequestError) -> bool:
+    if error.status_code != 404:
+        return False
+    body = (error.response_body or "").lower()
+    return "model" in body or "not found" in body
 
 
 def _is_account_restriction(status_code: int, body: str) -> bool:

@@ -385,6 +385,57 @@ async def test_empty_catalog_uses_known_fallback_models() -> None:
     assert client.model == "muse-wonder-1.0"
 
 
+async def test_list_models_retries_an_empty_catalog() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            return httpx.Response(200, json={"data": []})
+        return httpx.Response(200, json={"data": [{"id": "muse-spark-1.3"}]})
+
+    client = HttpMetaModelClient(
+        api_key="key",
+        retry_backoff_seconds=0,
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        models = await client.list_models()
+    finally:
+        await client.aclose()
+
+    assert calls == 3
+    assert models == ["muse-spark-1.3"]
+
+
+async def test_transient_missing_model_is_retried() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        if request.method == "GET" and request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": DEFAULT_META_MODEL}]})
+        calls += 1
+        if calls == 1:
+            return httpx.Response(
+                404,
+                json={"error": {"code": "model_not_found", "message": "not found"}},
+            )
+        return httpx.Response(200, json=completion_body())
+
+    client = HttpMetaModelClient(
+        api_key="key",
+        model=DEFAULT_META_MODEL,
+        retry_backoff_seconds=0,
+        transport=httpx.MockTransport(handler),
+    )
+    completion = await complete(client)
+
+    assert calls == 2
+    assert completion.payload == {"ok": True}
+
+
 async def test_list_models_accepts_alternate_catalog_shapes() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
