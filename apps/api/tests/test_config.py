@@ -30,6 +30,16 @@ def test_cors_origins_empty_falls_back_to_the_local_default(monkeypatch) -> None
     assert settings.cors_origins == DEFAULT_CORS_ORIGINS
 
 
+def test_meta_timeout_can_be_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("MECHANISM_AI_META_TIMEOUT_SECONDS", "")
+    settings = Settings(_env_file=None)
+    assert settings.meta_timeout_seconds is None
+
+    monkeypatch.setenv("MECHANISM_AI_META_TIMEOUT_SECONDS", "90")
+    settings = Settings(_env_file=None)
+    assert settings.meta_timeout_seconds == 90
+
+
 def test_cors_origins_still_accepts_a_list() -> None:
     settings = Settings(_env_file=None, cors_origins=["https://a.example"])
     assert settings.cors_origins == ["https://a.example"]

@@ -63,16 +63,22 @@ class Settings(BaseSettings):
     meta_api_key: SecretStr | None = None
     meta_model: str | None = None
     meta_reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh", "max"] = "minimal"
-    meta_timeout_seconds: float = Field(default=45.0, gt=0, le=120)
+    meta_timeout_seconds: float | None = Field(default=None, gt=0, le=3600)
     meta_max_retries: int = Field(default=1, ge=0, le=3)
-    meta_max_output_tokens: int = Field(default=8192, ge=256, le=16384)
+    meta_max_output_tokens: int = Field(default=16384, ge=256, le=16384)
 
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _parse_cors_origins(cls, value: object) -> list[str]:
         return _parse_origins(value)
 
-    @field_validator("meta_api_base_url", "meta_api_key", "meta_model", mode="before")
+    @field_validator(
+        "meta_api_base_url",
+        "meta_api_key",
+        "meta_model",
+        "meta_timeout_seconds",
+        mode="before",
+    )
     @classmethod
     def _blank_to_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():

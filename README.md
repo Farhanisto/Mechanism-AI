@@ -109,9 +109,9 @@ All server settings use the `MECHANISM_AI_` prefix (see `.env.example`):
 | `MECHANISM_AI_META_API_KEY` | unset | Server-side provider key; unset enables the offline fallback |
 | `MECHANISM_AI_META_MODEL` | `muse-spark-1.3` | Model identifier |
 | `MECHANISM_AI_META_REASONING_EFFORT` | `minimal` | `minimal`, `low`, `medium`, `high`, `xhigh` or `max` |
-| `MECHANISM_AI_META_TIMEOUT_SECONDS` | `45` | Per-request timeout |
+| `MECHANISM_AI_META_TIMEOUT_SECONDS` | unset | Per-request timeout; unset disables it |
 | `MECHANISM_AI_META_MAX_RETRIES` | `1` | Retries for timeouts, network errors and retryable HTTP statuses |
-| `MECHANISM_AI_META_MAX_OUTPUT_TOKENS` | `8192` | Output-token bound per model call |
+| `MECHANISM_AI_META_MAX_OUTPUT_TOKENS` | `16384` | Output-token bound per model call |
 | `MECHANISM_AI_API_PORT` | `8000` | Docker host port for the API |
 | `MECHANISM_AI_WEB_PORT` | `5173` | Docker host port for the web app |
 
