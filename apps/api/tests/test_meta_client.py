@@ -219,3 +219,55 @@ async def test_build_client_is_unconfigured_without_key() -> None:
 
     assert isinstance(client, UnconfiguredMetaModelClient)
     await client.aclose()
+
+
+async def test_missing_model_falls_back_to_the_default_model() -> None:
+    models: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        models.append(payload["model"])
+        if payload["model"] == "muse-wonder-1.0":
+            return httpx.Response(
+                404,
+                json={
+                    "error": {
+                        "code": "model_not_found",
+                        "message": "The requested model was not found.",
+                    }
+                },
+            )
+        return httpx.Response(200, json=completion_body())
+
+    client = HttpMetaModelClient(
+        api_key="key",
+        model="muse-wonder-1.0",
+        max_retries=0,
+        retry_backoff_seconds=0,
+        transport=httpx.MockTransport(handler),
+    )
+    completion = await complete(client)
+
+    assert models == ["muse-wonder-1.0", DEFAULT_META_MODEL]
+    assert completion.payload == {"ok": True}
+
+
+async def test_missing_default_model_raises_an_actionable_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            404,
+            json={"error": {"code": "model_not_found", "message": "not found"}},
+        )
+
+    client = HttpMetaModelClient(
+        api_key="key",
+        model=DEFAULT_META_MODEL,
+        max_retries=0,
+        retry_backoff_seconds=0,
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(MetaModelRequestError) as error:
+        await complete(client)
+
+    assert error.value.status_code == 404
+    assert "MECHANISM_AI_META_MODEL" in str(error.value)

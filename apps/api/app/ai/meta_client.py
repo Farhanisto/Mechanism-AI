@@ -34,9 +34,16 @@ class MetaModelTimeoutError(MetaModelError):
 class MetaModelRequestError(MetaModelError):
     error_code = "MODEL_REQUEST_FAILED"
 
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        response_body: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.response_body = response_body
 
 
 class MetaModelResponseError(MetaModelError):
@@ -152,7 +159,44 @@ class HttpMetaModelClient:
         }
 
         started = perf_counter()
-        response = await self._post_with_retries(request_payload)
+        try:
+            response = await self._post_with_retries(request_payload)
+        except MetaModelRequestError as exc:
+            body = (exc.response_body or "").lower()
+            model_missing = (
+                exc.status_code == 404
+                and ("model_not_found" in body or "model was not found" in body)
+            )
+            if model_missing and self._model != DEFAULT_META_MODEL:
+                logger.warning(
+                    "Meta model %r is not available for this API key; falling back to %r.",
+                    self._model,
+                    DEFAULT_META_MODEL,
+                )
+                try:
+                    response = await self._post_with_retries(
+                        {**request_payload, "model": DEFAULT_META_MODEL}
+                    )
+                except MetaModelRequestError as fallback_exc:
+                    raise MetaModelRequestError(
+                        f"The configured model {self._model!r} was not found, and the "
+                        f"fallback model {DEFAULT_META_MODEL!r} also failed with HTTP "
+                        f"{fallback_exc.status_code}. Set MECHANISM_AI_META_MODEL to a "
+                        "model your API key can access.",
+                        status_code=fallback_exc.status_code,
+                        response_body=fallback_exc.response_body,
+                    ) from fallback_exc
+                self._model = DEFAULT_META_MODEL
+            elif exc.status_code == 404:
+                raise MetaModelRequestError(
+                    f"The configured Meta model {self._model!r} was not found or is not "
+                    "available for this API key. Set MECHANISM_AI_META_MODEL to a model "
+                    f"your key can access (default: {DEFAULT_META_MODEL}).",
+                    status_code=exc.status_code,
+                    response_body=exc.response_body,
+                ) from exc
+            else:
+                raise
         latency_ms = (perf_counter() - started) * 1000.0
 
         try:
@@ -246,6 +290,7 @@ class HttpMetaModelClient:
             last_error = MetaModelRequestError(
                 f"The Meta model request failed with HTTP {response.status_code}.",
                 status_code=response.status_code,
+                response_body=body_snippet,
             )
             if (
                 response.status_code in _RETRYABLE_STATUS_CODES
