@@ -594,6 +594,15 @@ class DesignRunOrchestrator:
             logger.exception("Design run %s failed unexpectedly", run_id)
             self._fail(run, "INTERNAL_ERROR", "The design run failed unexpectedly.")
 
+        duration = (datetime.now(UTC) - run.created_at).total_seconds()
+        logger.info(
+            "Design run %s stopped at status=%s stage=%s after %.1fs",
+            run.run_id,
+            run.status.value,
+            run.stage.value,
+            duration,
+        )
+
     async def _run_pipeline(self, run: DesignRun, *, resuming: bool = False) -> None:
         engine_info: dict[str, Any] = {
             "name": "not_run",
@@ -783,6 +792,16 @@ class DesignRunOrchestrator:
         for attempt in range(1, run.max_candidates + 1):
             self._check_cancel(run)
             self._update_run(run, stage=Stage.GENERATE_CANDIDATE)
+            self.events.publish(
+                run.run_id,
+                RunEventName.CANDIDATE_GENERATION_STARTED.value,
+                {
+                    "attempt_number": attempt,
+                    "max_attempts": run.max_candidates,
+                    "capability": "four_bar_linkage",
+                    "model_enabled": self.meta_client.is_configured,
+                },
+            )
             if self.meta_client.is_configured:
                 candidate, completion = await generate_candidate(
                     brief,
@@ -1128,6 +1147,16 @@ class DesignRunOrchestrator:
         for attempt in range(1, run.max_candidates + 1):
             self._check_cancel(run)
             self._update_run(run, stage=Stage.GENERATE_CANDIDATE)
+            self.events.publish(
+                run.run_id,
+                RunEventName.CANDIDATE_GENERATION_STARTED.value,
+                {
+                    "attempt_number": attempt,
+                    "max_attempts": run.max_candidates,
+                    "capability": capability_id,
+                    "model_enabled": self.meta_client.is_configured,
+                },
+            )
             program, completion = await generate_program(
                 brief,
                 client=self.meta_client,
@@ -1523,6 +1552,13 @@ class DesignRunOrchestrator:
                 "latency_ms": round(completion.latency_ms, 2),
                 "usage": completion.usage,
             }
+        )
+        logger.info(
+            "Model call %s: model=%s latency=%.2fs tokens=%s",
+            stage,
+            completion.model,
+            completion.latency_ms / 1000.0,
+            completion.usage.get("total_tokens"),
         )
 
     @staticmethod

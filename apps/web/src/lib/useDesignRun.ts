@@ -27,6 +27,7 @@ const REFRESH_ON_EVENTS = new Set([
   "requirements_ready",
   "clarification_required",
   "capability_selected",
+  "candidate_generation_started",
   "evaluation_completed",
 ]);
 

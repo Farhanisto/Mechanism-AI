@@ -244,6 +244,21 @@ def test_unmodeled_motion_prompt_produces_a_blocking_question() -> None:
     assert "target_motion.type" in fields
 
 
+async def test_zero_optional_cad_values_are_treated_as_unset() -> None:
+    payload = {
+        **BRIEF_PAYLOAD,
+        "link_width_mm": 0.0,
+        "link_thickness_mm": 0.0,
+        "pivot_hole_mm": 0.0,
+    }
+
+    brief, _ = await parse_requirements(PROMPT, client=FakeMetaClient(payload))
+
+    assert brief.link_width_mm is None
+    assert brief.link_thickness_mm is None
+    assert brief.pivot_hole_mm is None
+
+
 async def test_parse_requirements_merges_policy_questions_with_model_questions() -> None:
     payload = {
         **BRIEF_PAYLOAD,

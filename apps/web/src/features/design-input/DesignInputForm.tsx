@@ -113,6 +113,10 @@ export function DesignInputForm({ onSubmit, disabled }: DesignInputFormProps) {
           <span className="panel-hint">⌘ / Ctrl + Enter to start</span>
           <span className="panel-hint">{prompt.length} / 4000</span>
         </div>
+        <p className="panel-hint form-expectation">
+          Each candidate adds one model call; runs usually take 10–30 s. Clarification
+          questions pause the run until answered.
+        </p>
       </form>
     </section>
   );

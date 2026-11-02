@@ -270,6 +270,7 @@ const EVENT_NAMES = [
   "requirements_ready",
   "clarification_required",
   "capability_selected",
+  "candidate_generation_started",
   "candidate_generated",
   "geometry_validated",
   "simulation_completed",

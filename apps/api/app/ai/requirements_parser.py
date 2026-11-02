@@ -168,6 +168,10 @@ def _merge_questions(
     return merged
 
 
+def _positive_or_none(value: float | None) -> float | None:
+    return value if value is not None and value > 0 else None
+
+
 def _with_standard_assumptions(brief: NormalizedBrief) -> NormalizedBrief:
     assumptions = list(brief.assumptions)
     for assumption in _STANDARD_ASSUMPTIONS:
@@ -425,9 +429,9 @@ async def parse_requirements(
                 if proposal.link_lengths is not None
                 else None
             ),
-            "link_width_mm": proposal.link_width_mm,
-            "link_thickness_mm": proposal.link_thickness_mm,
-            "pivot_hole_mm": proposal.pivot_hole_mm,
+            "link_width_mm": _positive_or_none(proposal.link_width_mm),
+            "link_thickness_mm": _positive_or_none(proposal.link_thickness_mm),
+            "pivot_hole_mm": _positive_or_none(proposal.pivot_hole_mm),
             "include_pins": proposal.include_pins,
         }
     )

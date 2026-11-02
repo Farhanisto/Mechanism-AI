@@ -38,6 +38,16 @@ export function RunStatusPanel({
 }: RunStatusPanelProps) {
   const streamLabel = STREAM_LABELS[streamState];
   const cancellable = run?.status === "queued" || run?.status === "running";
+  const durationSeconds = run
+    ? Math.max(
+        0,
+        (new Date(run.updated_at).getTime() - new Date(run.created_at).getTime()) / 1000,
+      )
+    : null;
+  const durationLabel =
+    run?.status === "completed" || run?.status === "failed" || run?.status === "cancelled"
+      ? "Duration"
+      : "Elapsed";
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -102,6 +112,10 @@ export function RunStatusPanel({
           <div>
             <dt>Error</dt>
             <dd>{run.error_code ?? "none"}</dd>
+          </div>
+          <div>
+            <dt>{durationLabel}</dt>
+            <dd>{durationSeconds?.toFixed(1)} s</dd>
           </div>
         </dl>
       ) : (

@@ -96,9 +96,11 @@ describe("Workspace3D", () => {
     expect(screen.getByText(/measured sweep/)).toBeTruthy();
   });
 
-  it("switches to the CAD view when the geometry artifact arrives", () => {
+  it("opens CAD and shows geometry when the artifact arrives", () => {
     const view = renderWorkspace();
-    expect(screen.getByText("computed state trace")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "CAD" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
 
     view.rerender(
       <Workspace3D
@@ -133,6 +135,41 @@ describe("Workspace3D", () => {
 
     expect(screen.queryByTestId("cad-viewer")).toBeNull();
     expect(screen.getByText("computed state trace")).toBeTruthy();
+  });
+
+  it("shows attempt chips and live progress while the run is running", () => {
+    renderWorkspace({
+      geometryUrl: "http://localhost:8000/geometry_candidate_001.stl",
+      geometryArtifactId: "geometry_candidate_001.stl",
+      attempts: [
+        {
+          attemptNumber: 1,
+          candidateId: "candidate_001",
+          status: "failed",
+          artifactId: "geometry_candidate_001.stl",
+          failedChecks: ["travel_distance"],
+          parameters: null,
+          hasSimulation: true,
+        },
+        {
+          attemptNumber: 2,
+          candidateId: null,
+          status: "modeling",
+          artifactId: null,
+          failedChecks: [],
+          parameters: null,
+          hasSimulation: false,
+        },
+      ],
+      activeAttemptNumber: 1,
+      isRunning: true,
+      liveLabel: "Attempt 2 · waiting for the model…",
+    });
+
+    expect(screen.getByRole("button", { name: /Attempt 1/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Attempt 2/ })).toBeTruthy();
+    expect(screen.getByText("attempt 1 · failed")).toBeTruthy();
+    expect(screen.getByText(/waiting for the model/)).toBeTruthy();
   });
 
   it("labels an unverified best attempt instead of claiming verification", () => {

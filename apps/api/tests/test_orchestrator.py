@@ -336,6 +336,7 @@ async def test_event_order_matches_the_contract(tmp_path: Path) -> None:
         "run_started",
         "requirements_ready",
         "capability_selected",
+        "candidate_generation_started",
         "candidate_generated",
         "simulation_completed",
         "evaluation_completed",

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { BriefArtifact, CandidateMetrics, SimulationResult } from "../../lib/api";
+import { isAttemptInProgress, type AttemptView } from "../../lib/attempts";
 import { MechanismCanvas } from "../simulation/MechanismCanvas";
 import { CadViewer } from "./CadViewer";
 import { Motion3DViewer } from "./Motion3DViewer";
@@ -16,6 +17,13 @@ interface Workspace3DProps {
   simulation: SimulationResult | null;
   brief: BriefArtifact | null;
   metrics: CandidateMetrics | null;
+  attempts?: AttemptView[];
+  activeAttemptNumber?: number | null;
+  onSelectAttempt?: (attemptNumber: number) => void;
+  followLatest?: boolean;
+  onFollowLatest?: () => void;
+  liveLabel?: string | null;
+  isRunning?: boolean;
 }
 
 const MODES: { id: WorkspaceMode; label: string }[] = [
@@ -32,8 +40,41 @@ export function Workspace3D({
   simulation,
   brief,
   metrics,
+  attempts = [],
+  activeAttemptNumber = null,
+  onSelectAttempt,
+  followLatest = true,
+  onFollowLatest,
+  liveLabel = null,
+  isRunning = false,
 }: Workspace3DProps) {
-  const [mode, setMode] = useState<WorkspaceMode>(geometryUrl ? "cad" : "motion");
+  const [mode, setMode] = useState<WorkspaceMode>("cad");
+  const activeAttempt =
+    attempts.find((attempt) => attempt.attemptNumber === activeAttemptNumber) ?? null;
+  const badgeClassName =
+    isRunning && !activeAttempt
+      ? "badge-computed"
+      : activeAttempt
+        ? activeAttempt.status === "passed"
+          ? "badge-verified"
+          : activeAttempt.status === "failed"
+            ? "badge-failed"
+            : "badge-computed"
+        : verified
+          ? "badge-verified"
+          : "badge-unavailable";
+  const badgeLabel =
+    isRunning && !activeAttempt
+      ? "generating"
+      : activeAttempt
+        ? activeAttempt.status === "passed"
+          ? `verified · attempt ${activeAttempt.attemptNumber}`
+          : activeAttempt.status === "failed"
+            ? `attempt ${activeAttempt.attemptNumber} · failed`
+            : `attempt ${activeAttempt.attemptNumber} · ${activeAttempt.status}`
+        : verified
+          ? "verified artifact"
+          : "best attempt (not verified)";
   const [userSelectedMode, setUserSelectedMode] = useState(false);
 
   useEffect(() => {
@@ -43,12 +84,12 @@ export function Workspace3D({
     if (userSelectedMode) {
       return;
     }
-    if (simulation && simulation.samples.length > 0) {
+    if (!isRunning && simulation && simulation.samples.length > 0) {
       setMode("motion");
-    } else if (geometryUrl) {
+    } else if (isRunning || geometryUrl) {
       setMode("cad");
     }
-  }, [geometryUrl, simulation, userSelectedMode]);
+  }, [geometryUrl, simulation, userSelectedMode, isRunning]);
 
   const selectMode = (next: WorkspaceMode) => {
     setUserSelectedMode(true);
@@ -75,16 +116,64 @@ export function Workspace3D({
         </div>
       </div>
 
+      {attempts.length > 0 || (isRunning && liveLabel) ? (
+        <div className="attempt-bar" role="group" aria-label="Design attempts">
+          <span className="attempt-bar-label">Attempts</span>
+          {attempts.map((attempt) => {
+            const active = attempt.attemptNumber === activeAttemptNumber;
+            return (
+              <button
+                key={attempt.attemptNumber}
+                type="button"
+                className={`attempt-chip attempt-${attempt.status}${
+                  active ? " is-active" : ""
+                }`}
+                aria-pressed={active}
+                title={
+                  attempt.failedChecks.length > 0
+                    ? `Failed checks: ${attempt.failedChecks.join(", ")}`
+                    : `Attempt ${attempt.attemptNumber}: ${attempt.status}`
+                }
+                onClick={() => onSelectAttempt?.(attempt.attemptNumber)}
+              >
+                <span className={`attempt-dot attempt-dot-${attempt.status}`} />
+                Attempt {attempt.attemptNumber}
+                {isAttemptInProgress(attempt) ? (
+                  <span className="attempt-spinner" aria-hidden="true" />
+                ) : null}
+              </button>
+            );
+          })}
+          {!followLatest && attempts.length > 0 && onFollowLatest ? (
+            <button type="button" className="attempt-follow" onClick={onFollowLatest}>
+              <span className="attempt-dot attempt-dot-live" />
+              Live
+            </button>
+          ) : null}
+          {isRunning && liveLabel ? (
+            <span className="attempt-live" role="status">
+              <span className="attempt-spinner" aria-hidden="true" />
+              {liveLabel}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
       {mode === "cad" ? (
         <div className="workspace-body">
           <div className="mode-badges">
-            <span className={`badge ${verified ? "badge-verified" : "badge-unavailable"}`}>
-              {verified ? "verified artifact" : "best attempt (not verified)"}
-            </span>
+            {activeAttempt || geometryUrl || isRunning ? (
+              <span className={`badge ${badgeClassName}`}>{badgeLabel}</span>
+            ) : null}
             {geometryArtifactId ? <code>{geometryArtifactId}</code> : null}
           </div>
           {geometryUrl ? (
             <CadViewer url={geometryUrl} />
+          ) : isRunning ? (
+            <div className="workspace-loading" role="status">
+              <span className="attempt-spinner" aria-hidden="true" />
+              <p>{liveLabel ?? "Generating geometry…"}</p>
+            </div>
           ) : (
             <p className="empty-state">
               {attemptCount > 0

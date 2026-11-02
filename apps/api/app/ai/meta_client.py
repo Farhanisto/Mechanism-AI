@@ -112,6 +112,7 @@ class HttpMetaModelClient:
         self._max_retries = max_retries
         self._max_output_tokens = max_output_tokens
         self._retry_backoff_seconds = retry_backoff_seconds
+        self._timeout_seconds = timeout_seconds
         self._url = f"{base_url.rstrip('/')}/chat/completions"
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(timeout_seconds),
@@ -152,7 +153,15 @@ class HttpMetaModelClient:
         }
 
         started = perf_counter()
-        response = await self._post_with_retries(request_payload)
+        try:
+            # httpx timeouts are per socket operation; enforce a hard wall-clock
+            # budget for the full request including retries.
+            async with asyncio.timeout(self._timeout_seconds):
+                response = await self._post_with_retries(request_payload)
+        except TimeoutError as exc:
+            raise MetaModelTimeoutError(
+                f"The Meta model request exceeded {self._timeout_seconds:.0f} seconds."
+            ) from exc
         latency_ms = (perf_counter() - started) * 1000.0
 
         try:
@@ -263,7 +272,8 @@ class HttpMetaModelClient:
         delay = self._retry_backoff_seconds * (2**attempt)
         if retry_after is not None:
             try:
-                delay = max(delay, float(retry_after))
+                # Do not let a provider Retry-After stall a demo run for minutes.
+                delay = max(delay, min(float(retry_after), 5.0))
             except ValueError:
                 pass
         await asyncio.sleep(delay)

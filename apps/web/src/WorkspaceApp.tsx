@@ -1,5 +1,5 @@
 import { ArrowLeft, CheckCircle2, FlaskConical, Layers3, ShieldCheck } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { RunStatusPanel } from "./components/RunStatusPanel";
 import { CandidateHistory } from "./features/candidate-history/CandidateHistory";
@@ -11,7 +11,12 @@ import { RequirementsPanel } from "./features/requirements/RequirementsPanel";
 import { ValidationReport } from "./features/validation-report/ValidationReport";
 import { Workspace3D } from "./features/workspace/Workspace3D";
 import { Brand } from "./landing/Brand";
-import { artifactUrl, getHealth } from "./lib/api";
+import { artifactUrl, getArtifact, getHealth, type SimulationResult } from "./lib/api";
+import {
+  buildAttempts,
+  isAttemptInProgress,
+  type AttemptStatus,
+} from "./lib/attempts";
 import { useDesignRun } from "./lib/useDesignRun";
 import "./demo.css";
 
@@ -28,6 +33,16 @@ const DEMO_HIGHLIGHTS = [
   { icon: Layers3, label: "CAD + motion artifacts" },
   { icon: ShieldCheck, label: "Evidence bundle" },
 ];
+
+const ATTEMPT_STATUS_LABEL: Record<AttemptStatus, string> = {
+  queued: "queued",
+  modeling: "waiting for the model",
+  compiling: "building CAD geometry",
+  simulating: "simulating the mechanism",
+  evaluating: "evaluating the attempt",
+  passed: "passed",
+  failed: "failed",
+};
 
 export function WorkspaceApp() {
   const {
@@ -75,6 +90,14 @@ export function WorkspaceApp() {
     }
   }, [events]);
 
+  useEffect(() => {
+    if (run?.status === "awaiting_clarification") {
+      // On phones the brief column is hidden on other tabs; never leave a paused
+      // run without showing the questions.
+      setMobileSection("brief");
+    }
+  }, [run?.status]);
+
   const finalRecord =
     (run?.final_candidate_id
       ? candidates.find(
@@ -94,12 +117,120 @@ export function WorkspaceApp() {
     finalRecord?.candidate.geometry_artifact_id ??
     bestProgram?.geometry_artifact_id ??
     null;
-  const geometryUrl =
-    run && geometryArtifactId ? artifactUrl(run.run_id, geometryArtifactId) : null;
+  const attempts = useMemo(
+    () => buildAttempts({ events, programs, candidates }),
+    [events, programs, candidates],
+  );
+  const latestAttemptWithArtifact =
+    [...attempts].reverse().find((attempt) => attempt.artifactId) ?? null;
+  const [selectedAttemptNumber, setSelectedAttemptNumber] = useState<number | null>(null);
+  const [followLatest, setFollowLatest] = useState(true);
+  const [attemptSimulation, setAttemptSimulation] = useState<SimulationResult | null>(null);
+  const runIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (run?.run_id !== runIdRef.current) {
+      runIdRef.current = run?.run_id ?? null;
+      setFollowLatest(true);
+      setSelectedAttemptNumber(null);
+      setAttemptSimulation(null);
+    }
+  }, [run?.run_id]);
+
+  useEffect(() => {
+    if (!followLatest || !latestAttemptWithArtifact) {
+      return;
+    }
+    setSelectedAttemptNumber(latestAttemptWithArtifact.attemptNumber);
+  }, [
+    followLatest,
+    latestAttemptWithArtifact?.attemptNumber,
+    latestAttemptWithArtifact?.artifactId,
+  ]);
+
+  useEffect(() => {
+    if (
+      !followLatest ||
+      !run?.final_candidate_id ||
+      run.status !== "completed" &&
+      run.status !== "failed"
+    ) {
+      return;
+    }
+    const finalAttempt = attempts.find(
+      (attempt) => attempt.candidateId === run.final_candidate_id,
+    );
+    if (finalAttempt) {
+      setSelectedAttemptNumber(finalAttempt.attemptNumber);
+    }
+  }, [followLatest, run?.status, run?.final_candidate_id, attempts]);
+
+  const activeAttempt =
+    (selectedAttemptNumber != null
+      ? attempts.find((attempt) => attempt.attemptNumber === selectedAttemptNumber)
+      : null) ?? latestAttemptWithArtifact;
+
+  useEffect(() => {
+    if (!run || !activeAttempt?.candidateId || !activeAttempt.hasSimulation) {
+      setAttemptSimulation(null);
+      return;
+    }
+    if (activeAttempt.candidateId === run.final_candidate_id && simulation) {
+      setAttemptSimulation(simulation);
+      return;
+    }
+    let cancelled = false;
+    getArtifact<SimulationResult>(
+      run.run_id,
+      `simulation_${activeAttempt.candidateId}.json`,
+    )
+      .then((payload) => {
+        if (!cancelled) {
+          setAttemptSimulation(payload);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAttemptSimulation(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [run?.run_id, run?.final_candidate_id, activeAttempt?.candidateId, activeAttempt?.hasSimulation, simulation]);
+
+  const activeArtifactId = activeAttempt?.artifactId ?? geometryArtifactId;
+  const activeGeometryUrl =
+    run && activeArtifactId ? artifactUrl(run.run_id, activeArtifactId) : null;
+  const activeVerified = activeAttempt
+    ? activeAttempt.status === "passed"
+    : geometryVerified;
+  const workspaceSimulation = activeAttempt ? attemptSimulation : simulation;
+
+  const isRunning = run?.status === "running" || run?.status === "queued";
+  const liveAttempt = attempts.find(isAttemptInProgress) ?? null;
+  const lastAttempt = attempts.at(-1) ?? null;
+  const liveLabel = !isRunning
+    ? null
+    : liveAttempt
+      ? `Attempt ${liveAttempt.attemptNumber} · ${ATTEMPT_STATUS_LABEL[liveAttempt.status]}…`
+      : lastAttempt?.status === "passed"
+        ? "Finalizing the validated design…"
+        : attempts.length > 0
+          ? `Attempt ${lastAttempt?.attemptNumber ?? attempts.length} failed · preparing the next attempt…`
+          : "Interpreting the brief with the model…";
 
   const handleStart = (prompt: string, maxCandidates: number) => {
     setMobileSection("model");
     start(prompt, maxCandidates);
+  };
+
+  const pendingQuestions = run?.pending_clarifications.length ?? 0;
+  const needsClarification = run?.status === "awaiting_clarification";
+  const scrollToClarifications = () => {
+    setMobileSection("brief");
+    const panel = document.querySelector(".clarification-panel");
+    panel?.scrollIntoView({ behavior: "smooth", block: "center" });
   };
 
   const resultsReady = Boolean(
@@ -193,12 +324,31 @@ export function WorkspaceApp() {
               }}
             >
               {section.label}
-              {section.id === "results" && resultsReady ? (
-                <span className="demo-mobile-dot" aria-label="results available" />
-              ) : null}
+              {(section.id === "results" && resultsReady) ||
+            (section.id === "brief" && needsClarification) ? (
+              <span
+                className="demo-mobile-dot"
+                aria-label={section.id === "brief" ? "questions waiting" : "results available"}
+              />
+            ) : null}
             </button>
           ))}
         </nav>
+
+        {needsClarification ? (
+          <div className="demo-clarification-banner" role="status">
+            <div>
+              <strong>Run paused for clarification</strong>
+              <span>
+                {pendingQuestions} question{pendingQuestions === 1 ? "" : "s"} need an answer
+                before candidates are generated.
+              </span>
+            </div>
+            <button type="button" onClick={scrollToClarifications}>
+              Answer questions
+            </button>
+          </div>
+        ) : null}
 
         {aiEnabled === false ? (
           <div className="demo-notice" role="status">
@@ -244,13 +394,23 @@ export function WorkspaceApp() {
             }`}
           >
             <Workspace3D
-              geometryUrl={geometryUrl}
-              geometryArtifactId={geometryArtifactId}
-              verified={geometryVerified}
+              geometryUrl={activeGeometryUrl}
+              geometryArtifactId={activeArtifactId}
+              verified={activeVerified}
               attemptCount={programs.length}
-              simulation={simulation}
+              simulation={workspaceSimulation}
               brief={briefArtifact}
               metrics={metrics}
+              attempts={attempts}
+              activeAttemptNumber={activeAttempt?.attemptNumber ?? null}
+              onSelectAttempt={(attemptNumber) => {
+                setFollowLatest(false);
+                setSelectedAttemptNumber(attemptNumber);
+              }}
+              followLatest={followLatest}
+              onFollowLatest={() => setFollowLatest(true)}
+              liveLabel={liveLabel}
+              isRunning={isRunning}
             />
             <RunStatusPanel
               run={run}

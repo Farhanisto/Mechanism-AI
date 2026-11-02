@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     meta_reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh", "max"] = "minimal"
     meta_timeout_seconds: float = Field(default=45.0, gt=0, le=120)
     meta_max_retries: int = Field(default=1, ge=0, le=3)
-    meta_max_output_tokens: int = Field(default=8192, ge=256, le=8192)
+    meta_max_output_tokens: int = Field(default=8192, ge=256, le=16384)
 
     @field_validator("cors_origins", mode="before")
     @classmethod
