@@ -81,8 +81,10 @@ class Settings(BaseSettings):
     )
     @classmethod
     def _blank_to_none(cls, value: object) -> object:
-        if isinstance(value, str) and not value.strip():
-            return None
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
         return value
 
 

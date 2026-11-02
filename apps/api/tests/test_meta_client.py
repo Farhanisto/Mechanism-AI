@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import httpx
@@ -351,6 +352,99 @@ async def test_catalog_fallback_when_the_default_is_also_missing() -> None:
 
     assert requested == ["muse-wonder-9.9", DEFAULT_META_MODEL, "muse-spark-2.0"]
     assert client.model == "muse-spark-2.0"
+    assert completion.payload == {"ok": True}
+
+
+async def test_concurrent_model_discovery_loads_the_catalog_once() -> None:
+    catalog_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal catalog_calls
+        if request.method == "GET" and request.url.path.endswith("/models"):
+            catalog_calls += 1
+            await asyncio.sleep(0.01)
+            return httpx.Response(200, json={"data": [{"id": "muse-spark-2.0"}]})
+        payload = json.loads(request.content)
+        if payload["model"] == DEFAULT_META_MODEL:
+            return httpx.Response(
+                404,
+                json={"error": {"code": "model_not_found", "message": "not found"}},
+            )
+        return httpx.Response(200, json=completion_body())
+
+    client = HttpMetaModelClient(
+        api_key="key",
+        model=DEFAULT_META_MODEL,
+        max_retries=0,
+        retry_backoff_seconds=0,
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        first, second = await asyncio.gather(
+            client.complete_json(
+                system_prompt="system",
+                user_prompt="user",
+                schema=SCHEMA,
+                schema_name="test_schema",
+            ),
+            client.complete_json(
+                system_prompt="system",
+                user_prompt="user",
+                schema=SCHEMA,
+                schema_name="test_schema",
+            ),
+        )
+    finally:
+        await client.aclose()
+
+    assert catalog_calls == 1
+    assert first.payload == {"ok": True}
+    assert second.payload == {"ok": True}
+
+
+async def test_catalog_failure_is_not_cached() -> None:
+    catalog_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal catalog_calls
+        if request.method == "GET" and request.url.path.endswith("/models"):
+            catalog_calls += 1
+            if catalog_calls == 1:
+                return httpx.Response(503, text="busy")
+            return httpx.Response(200, json={"data": [{"id": "muse-spark-2.0"}]})
+        payload = json.loads(request.content)
+        if payload["model"] == DEFAULT_META_MODEL:
+            return httpx.Response(
+                404,
+                json={"error": {"code": "model_not_found", "message": "not found"}},
+            )
+        return httpx.Response(200, json=completion_body())
+
+    client = HttpMetaModelClient(
+        api_key="key",
+        model=DEFAULT_META_MODEL,
+        max_retries=0,
+        retry_backoff_seconds=0,
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        with pytest.raises(MetaModelRequestError):
+            await client.complete_json(
+                system_prompt="system",
+                user_prompt="user",
+                schema=SCHEMA,
+                schema_name="test_schema",
+            )
+        completion = await client.complete_json(
+            system_prompt="system",
+            user_prompt="user",
+            schema=SCHEMA,
+            schema_name="test_schema",
+        )
+    finally:
+        await client.aclose()
+
+    assert catalog_calls == 2
     assert completion.payload == {"ok": True}
 
 

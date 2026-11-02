@@ -147,6 +147,7 @@ class HttpMetaModelClient:
         self._url = f"{self._base_url}/chat/completions"
         self._catalog_loaded = False
         self._available_models: list[str] = []
+        self._catalog_lock = asyncio.Lock()
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(timeout_seconds) if timeout_seconds else httpx.Timeout(None),
             headers={"Authorization": f"Bearer {api_key}"},
@@ -293,17 +294,24 @@ class HttpMetaModelClient:
         if "model" not in body and "not found" not in body:
             raise error
 
+        # Use the model from the failed request rather than the mutable client
+        # attribute: concurrent requests may already have updated it.
+        failed_model = payload.get("model")
+        if not isinstance(failed_model, str):
+            failed_model = self._model
+
         candidates: list[str] = []
-        if self._model != DEFAULT_META_MODEL:
+        if failed_model != DEFAULT_META_MODEL:
             candidates.append(DEFAULT_META_MODEL)
 
+        attempted = {failed_model, *candidates}
         last_error = error
 
         async def attempt(candidate: str) -> httpx.Response | None:
             nonlocal last_error
             logger.warning(
                 "Meta model %r is not available for this API key; retrying with %r.",
-                self._model,
+                failed_model,
                 candidate,
             )
             try:
@@ -322,14 +330,18 @@ class HttpMetaModelClient:
         # The default was also rejected (or already configured): ask the provider
         # which models this key can actually use.
         available = await self._load_available_models()
-        chosen = _choose_model(available, exclude={self._model, *candidates})
-        if chosen is not None:
+        for chosen in _rank_models(available, exclude=attempted):
             response = await attempt(chosen)
             if response is not None:
                 return response
 
         available_hint = (
-            f" Available models for this API key: {', '.join(available[:12])}." if available else ""
+            f" Available models for this API key: {', '.join(available[:12])}."
+            if available
+            else (
+                f" The model catalog at {self._base_url}/models could not be listed; "
+                "verify MECHANISM_AI_META_API_BASE_URL and the API key."
+            )
         )
         provider_hint = (
             f" Provider response: {last_error.response_body[:300]}"
@@ -337,7 +349,7 @@ class HttpMetaModelClient:
             else ""
         )
         raise MetaModelRequestError(
-            f"The configured Meta model {self._model!r} was not found or is not "
+            f"The configured Meta model {failed_model!r} was not found or is not "
             "available for this API key. Set MECHANISM_AI_META_MODEL to a model your "
             f"key can access.{available_hint}{provider_hint}",
             status_code=last_error.status_code or 404,
@@ -347,12 +359,19 @@ class HttpMetaModelClient:
     async def _load_available_models(self) -> list[str]:
         if self._catalog_loaded:
             return self._available_models
-        self._catalog_loaded = True
-        try:
-            self._available_models = await self.list_models()
-        except Exception as exc:  # noqa: BLE001 - discovery must never mask the model error
-            logger.warning("Could not list Meta models: %s", exc)
-            self._available_models = []
+        async with self._catalog_lock:
+            # Another request may have populated the catalog while we waited.
+            if self._catalog_loaded:
+                return self._available_models
+            try:
+                models = await self.list_models()
+            except Exception as exc:  # noqa: BLE001 - discovery must never mask the model error
+                # Do not cache a failure: a transient provider error should not
+                # permanently disable model discovery for this process.
+                logger.warning("Could not list Meta models: %s", exc)
+                return []
+            self._available_models = models
+            self._catalog_loaded = True
         if self._available_models:
             logger.info(
                 "Available Meta models for this API key: %s",
@@ -461,10 +480,8 @@ def _is_account_restriction(status_code: int, body: str) -> bool:
     return any(hint in lowered for hint in _ACCOUNT_RESTRICTION_HINTS)
 
 
-def _choose_model(available: list[str], *, exclude: set[str]) -> str | None:
+def _rank_models(available: list[str], *, exclude: set[str]) -> list[str]:
     candidates = [model for model in available if model not in exclude]
-    if not candidates:
-        return None
 
     def score(model: str) -> tuple[int, str]:
         lowered = model.lower()
@@ -493,7 +510,7 @@ def _choose_model(available: list[str], *, exclude: set[str]) -> str | None:
             return (1, lowered)
         return (2, lowered)
 
-    return min(candidates, key=score)
+    return sorted(candidates, key=score)
 
 
 def build_meta_client(settings: Settings) -> MetaModelClient:
